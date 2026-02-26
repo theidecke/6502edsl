@@ -1,19 +1,14 @@
 module Target.C64
-    ( TargetConfig (..)
-    , C64Subsystems (..)
+    ( C64Subsystems (..)
     , defaultC64Subsystems
     , c64TargetConfig
     ) where
 
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Data.Word (Word8)
+import Data.Word (Word8, Word16)
 
--- | Hardware configuration describing available resources for generated code.
-data TargetConfig = TargetConfig
-    { freeZeroPage :: Set Word8
-    }
-    deriving (Show)
+import Asm.Monad (TargetConfig(..))
 
 -- | Which C64 subsystems are active and therefore occupy zero page addresses.
 data C64Subsystems = C64Subsystems
@@ -35,14 +30,15 @@ defaultC64Subsystems = C64Subsystems
     , useKernalIRQ = True
     }
 
--- | Build a 'TargetConfig' from a C64 subsystem selection.
+-- | Build a 'TargetConfig' from a C64 subsystem selection and an origin address.
 --
 -- Determines which zero page addresses are free based on which subsystems
 -- are disabled. When the KERNAL is off entirely, all its sub-components
 -- (cassette, RS-232, IRQ) are implicitly off as well.
-c64TargetConfig :: C64Subsystems -> TargetConfig
-c64TargetConfig subs = TargetConfig
-    { freeZeroPage = alwaysFree
+c64TargetConfig :: Word16 -> C64Subsystems -> TargetConfig
+c64TargetConfig org subs = TargetConfig
+    { origin = org
+    , freeZeroPage = alwaysFree
         <> basicFree
         <> kernalFree
     }

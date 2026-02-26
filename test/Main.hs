@@ -6,12 +6,13 @@ module Main where
 import Data.Bits ((.&.), (.|.), shiftR, shiftL)
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Word (Word8, Word16)
 import System.Exit (exitFailure)
 import Test.QuickCheck hiding ((.&.), label)
 import Test.QuickCheck.Random (mkQCGen)
 
-import Asm.Monad (ASM, assemble, emit, label, lo, hi)
+import Asm.Monad (ASM, TargetConfig(..), assemble, emit, label, allocZP, lo, hi)
 import Asm.Mos6502
 import ISA.Mos6502 (Opcode(..))
 import Target.C64.PRG (toPRG)
@@ -41,13 +42,21 @@ modeSize MRelative    = 2
 operandSize :: Mode -> Int
 operandSize m = modeSize m - 1
 
+-- | Minimal config with no free zero-page bytes.
+simpleConfig :: Word16 -> TargetConfig
+simpleConfig org = TargetConfig { origin = org, freeZeroPage = Set.empty }
+
 -- | Assemble a single ASM action and return the emitted bytes.
 asm :: ASM a -> [Word8]
-asm = snd . assemble 0x0000
+asm = snd . assemble (simpleConfig 0x0000)
 
 -- | Assemble starting at a given origin.
 asmAt :: Word16 -> ASM a -> [Word8]
-asmAt org = snd . assemble org
+asmAt org = snd . assemble (simpleConfig org)
+
+-- | Config with specific free zero-page bytes.
+zpConfig :: [Word8] -> TargetConfig
+zpConfig addrs = TargetConfig { origin = 0x0000, freeZeroPage = Set.fromList addrs }
 
 -- ---------------------------------------------------------------------------
 -- Test instruction type (for random program generation)
@@ -176,19 +185,19 @@ prop_aslAccumulator = asm asl_a == [opcodeFor ASL MAccumulator]
 
 prop_labelReturnsOrigin :: Word16 -> Bool
 prop_labelReturnsOrigin org =
-    let (pc, _) = assemble org label
+    let (pc, _) = assemble (simpleConfig org) label
     in  pc == org
 
 prop_emitAdvancesPC :: Word16 -> [Word8] -> Property
 prop_emitAdvancesPC org bs =
     length bs < 256 ==>
-        let (pc, _) = assemble org (emit bs >> label)
+        let (pc, _) = assemble (simpleConfig org) (emit bs >> label)
         in  pc == org + fromIntegral (length bs)
 
 prop_sequenceAdditive :: Word16 -> [Word8] -> [Word8] -> Property
 prop_sequenceAdditive org a b =
     length a + length b < 256 ==>
-        let (pc, _) = assemble org (emit a >> emit b >> label)
+        let (pc, _) = assemble (simpleConfig org) (emit a >> emit b >> label)
         in  pc == org + fromIntegral (length a + length b)
 
 prop_sequenceBytesConcat :: [Word8] -> [Word8] -> Property
@@ -259,6 +268,46 @@ prop_branchOffsetForward =
             skip <- label
             pure ()
     in  bytes !! 1 == 0x01
+
+-- ---------------------------------------------------------------------------
+-- Zero-page allocation (4 props)
+-- ---------------------------------------------------------------------------
+
+prop_allocZPSingleByte :: Bool
+prop_allocZPSingleByte =
+    let cfg = zpConfig [0x02, 0xFB, 0xFC]
+        (addr, _) = assemble cfg (allocZP 1)
+    in  addr == 0x02  -- smallest free byte
+
+prop_allocZPMultiByte :: Bool
+prop_allocZPMultiByte =
+    -- Needs 3 contiguous bytes; [0x02] is isolated, [0xFB..0xFE] has 4 contiguous
+    let cfg = zpConfig ([0x02] ++ [0xFB .. 0xFE])
+        (addr, _) = assemble cfg (allocZP 3)
+    in  addr == 0xFB
+
+prop_allocZPNoOverlap :: Bool
+prop_allocZPNoOverlap =
+    let cfg = zpConfig [0x10 .. 0x19]  -- 10 contiguous bytes
+        ((a1, a2), _) = assemble cfg $ do
+            x <- allocZP 4
+            y <- allocZP 4
+            pure (x, y)
+    in  a1 == 0x10 && a2 == 0x14
+
+prop_allocZPInMdo :: Bool
+prop_allocZPInMdo =
+    -- allocZP inside mdo should work since it's an eager state transition
+    let cfg = zpConfig [0x02, 0x03]
+        (_, bytes) = assemble cfg $ mdo
+            ptr <- allocZP 1
+            lda (Imm 0x42)
+            sta (ZP ptr)
+            rts
+    in  bytes == [ 0xA9, 0x42   -- LDA #$42
+                 , 0x85, 0x02   -- STA $02
+                 , 0x60         -- RTS
+                 ]
 
 -- ---------------------------------------------------------------------------
 -- PRG generation (3 props)
@@ -389,6 +438,12 @@ main = do
         , checkOnce "forward branch (mdo)"     prop_forwardBranchMdo
         , checkOnce "backward offset byte"     prop_branchOffsetBackward
         , checkOnce "forward offset byte"      prop_branchOffsetForward
+
+        , section "Zero-page allocation"
+        , checkOnce "single-byte allocation"     prop_allocZPSingleByte
+        , checkOnce "multi-byte contiguous"      prop_allocZPMultiByte
+        , checkOnce "allocations don't overlap"  prop_allocZPNoOverlap
+        , checkOnce "allocZP works inside mdo"   prop_allocZPInMdo
 
         , section "PRG generation"
         , check "prg length = input + 2"   prop_prgLength

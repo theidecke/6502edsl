@@ -1,19 +1,35 @@
 module Asm.Monad
     ( ASM
+    , TargetConfig (..)
     , emit
     , label
     , assemble
+    , allocZP
     , lo
     , hi
     ) where
 
 import Control.Monad.Fix (MonadFix(..))
 import Data.Bits (shiftR)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Word (Word8, Word16)
 
--- | The assembler monad. Takes a program counter, returns a result,
--- the updated program counter, and a difference list of emitted bytes.
-newtype ASM a = ASM (Word16 -> (a, Word16, Endo [Word8]))
+-- | Target-agnostic configuration for assembling a program.
+data TargetConfig = TargetConfig
+    { origin       :: Word16
+    , freeZeroPage :: Set Word8
+    } deriving (Show)
+
+-- | Internal assembler state: program counter + free zero-page set.
+data AsmState = AsmState
+    { asmPC     :: !Word16
+    , asmFreeZP :: !(Set Word8)
+    }
+
+-- | The assembler monad. Carries assembler state and a difference list
+-- of emitted bytes.
+newtype ASM a = ASM (AsmState -> (a, AsmState, Endo [Word8]))
 
 -- | Difference list wrapper — just a newtype over @[Word8] -> [Word8]@.
 newtype Endo a = Endo (a -> a)
@@ -25,46 +41,75 @@ instance Monoid (Endo a) where
     mempty = Endo id
 
 instance Functor ASM where
-    fmap f (ASM g) = ASM $ \pc ->
-        let (a, pc', w) = g pc
-        in  (f a, pc', w)
+    fmap f (ASM g) = ASM $ \s ->
+        let (a, s', w) = g s
+        in  (f a, s', w)
 
 instance Applicative ASM where
-    pure a = ASM $ \pc -> (a, pc, mempty)
-    ASM f <*> ASM g = ASM $ \pc ->
-        let (fab, pc1, w1) = f pc
-            (a,   pc2, w2) = g pc1
-        in  (fab a, pc2, w1 <> w2)
+    pure a = ASM $ \s -> (a, s, mempty)
+    ASM f <*> ASM g = ASM $ \s ->
+        let (fab, s1, w1) = f s
+            (a,   s2, w2) = g s1
+        in  (fab a, s2, w1 <> w2)
 
 instance Monad ASM where
-    ASM m >>= k = ASM $ \pc ->
-        let (a,  pc1, w1) = m pc
-            ASM n          = k a
-            (b,  pc2, w2) = n pc1
-        in  (b, pc2, w1 <> w2)
+    ASM m >>= k = ASM $ \s ->
+        let (a,  s1, w1) = m s
+            ASM n         = k a
+            (b,  s2, w2) = n s1
+        in  (b, s2, w1 <> w2)
 
 -- | MonadFix instance — the key to forward label references.
 -- Works because instruction sizes are determined eagerly (PC advances
 -- immediately); only operand *values* (branch offsets, addresses) are lazy.
+-- ZP allocation is also an eager state transition, so MonadFix remains correct.
 instance MonadFix ASM where
-    mfix f = ASM $ \pc ->
-        let (a, pc', w) = let ASM g = f a in g pc
-        in  (a, pc', w)
+    mfix f = ASM $ \s ->
+        let (a, s', w) = let ASM g = f a in g s
+        in  (a, s', w)
 
 -- | Emit raw bytes and advance the program counter.
 emit :: [Word8] -> ASM ()
-emit bs = ASM $ \pc ->
-    ((), pc + fromIntegral (length bs), Endo (bs ++))
+emit bs = ASM $ \s ->
+    ((), s { asmPC = asmPC s + fromIntegral (length bs) }, Endo (bs ++))
 
 -- | Return the current program counter (defines a label).
 label :: ASM Word16
-label = ASM $ \pc -> (pc, pc, mempty)
+label = ASM $ \s -> (asmPC s, s, mempty)
 
--- | Run an assembly block starting at the given origin address.
-assemble :: Word16 -> ASM a -> (a, [Word8])
-assemble org (ASM f) =
-    let (a, _pc, Endo dl) = f org
+-- | Run an assembly block with the given target configuration.
+assemble :: TargetConfig -> ASM a -> (a, [Word8])
+assemble cfg (ASM f) =
+    let s0 = AsmState { asmPC = origin cfg, asmFreeZP = freeZeroPage cfg }
+        (a, _s, Endo dl) = f s0
     in  (a, dl [])
+
+-- | Allocate @n@ contiguous bytes from the free zero-page region.
+-- Returns the start address. Fails at assembly time if no contiguous
+-- block of the requested size is available.
+allocZP :: Int -> ASM Word8
+allocZP n
+    | n <= 0    = error "allocZP: requested size must be positive"
+    | otherwise = ASM $ \s ->
+        let free = asmFreeZP s
+            start = findContiguous n (Set.toAscList free)
+            block = Set.fromList [start .. start + fromIntegral n - 1]
+        in  (start, s { asmFreeZP = free `Set.difference` block }, mempty)
+
+-- | Find @n@ contiguous bytes in a sorted list of free addresses.
+findContiguous :: Int -> [Word8] -> Word8
+findContiguous n = go
+  where
+    err = error $ "allocZP: cannot find " ++ show n
+                   ++ " contiguous free zero-page bytes"
+
+    go [] = err
+    go (a:as)
+        | runLen >= n = a
+        | otherwise   = go (drop runLen (a:as))
+      where
+        -- Count how many addresses form a contiguous run starting at @a@.
+        runLen = 1 + length (takeWhile id (zipWith (\x y -> x + 1 == y) (a:as) as))
 
 -- | Low byte of a 16-bit word (little-endian).
 lo :: Word16 -> Word8
@@ -73,4 +118,3 @@ lo = fromIntegral
 -- | High byte of a 16-bit word (little-endian).
 hi :: Word16 -> Word8
 hi w = fromIntegral (w `shiftR` 8)
-
