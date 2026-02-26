@@ -8,6 +8,7 @@ module Asm.Mos6502
       -- * Addressing mode tags
     , Mode(..)
       -- * Opcode table lookup
+    , opcodeTable
     , opcodeFor
       -- * Operand instructions
     , lda, ldx, ldy, sta, stx, sty
