@@ -14,10 +14,9 @@ import Target.C64.D64 (toD64)
 
 main :: IO ()
 main = do
-    let cfg = c64TargetConfig 0x0800 defaultC64Subsystems
+    let cfg = c64TargetConfig 0xC000 defaultC64Subsystems
 
-    -- Test 1: Linear program — init + set border/background colors
-    -- SEI; CLD; LDX #$FF; TXS; LDA #$00; STA $D020; STA $D021; RTS
+    -- Test 1: Init + set border/background colors, then spin forever
     let (_, bytes1) = assemble cfg $ do
             sei
             cld
@@ -26,11 +25,12 @@ main = do
             lda (Imm 0x00)
             sta (Abs 0xD020)
             sta (Abs 0xD021)
-            rts
+            loop <- label
+            jmp loop
 
-    putStrLn "Test 1 — linear program (init + set colors):"
+    putStrLn "Test 1 — init + set colors + infinite loop:"
     putStrLn $ "  " ++ hexDump bytes1
-    putStrLn $ "  expected: 78 D8 A2 FF 9A A9 00 8D 20 D0 8D 21 D0 60"
+    putStrLn $ "  expected: 78 D8 A2 FF 9A A9 00 8D 20 D0 8D 21 D0 4C 0D C0"
     putStrLn ""
 
     -- Test 2: Forward branch via mdo
