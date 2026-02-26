@@ -9,6 +9,7 @@ import Data.Map.Strict qualified as Map
 import Data.Word (Word8, Word16)
 import System.Exit (exitFailure)
 import Test.QuickCheck hiding ((.&.), label)
+import Test.QuickCheck.Random (mkQCGen)
 
 import Asm.Monad (ASM, assemble, emit, label, lo, hi)
 import Asm.Mos6502
@@ -391,7 +392,7 @@ main = do
 
         , section "PRG generation"
         , check "prg length = input + 2"   prop_prgLength
-        , checkOnce "prg header matches lo/hi" prop_prgHeader
+        , check "prg header matches lo/hi" prop_prgHeader
         , check "prg payload preserved"    prop_prgPayload
 
         , section "D64 generation"
@@ -408,14 +409,18 @@ section name = do
     putStrLn $ "\n=== " ++ name ++ " ==="
     pure True
 
+-- | Deterministic args: fixed seed, 1000 test cases.
+detArgs :: Args
+detArgs = stdArgs { maxSuccess = 1000, replay = Just (mkQCGen 42, 0) }
+
 check :: Testable prop => String -> prop -> IO Bool
-check name prop = do
+check = checkWith detArgs
+
+checkWith :: Testable prop => Args -> String -> prop -> IO Bool
+checkWith args name prop = do
     putStr $ "  " ++ name ++ ": "
-    r <- quickCheckResult prop
+    r <- quickCheckWithResult args prop
     pure $ isSuccess r
 
 checkOnce :: Testable prop => String -> prop -> IO Bool
-checkOnce name prop = do
-    putStr $ "  " ++ name ++ ": "
-    r <- quickCheckResult (once prop)
-    pure $ isSuccess r
+checkOnce = checkWith detArgs { maxSuccess = 1 }
