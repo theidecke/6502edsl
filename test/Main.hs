@@ -13,6 +13,8 @@ import Test.QuickCheck hiding ((.&.), label)
 import Asm.Monad (ASM, assemble, emit, label, lo, hi)
 import Asm.Mos6502
 import ISA.Mos6502 (Opcode(..))
+import Target.C64.PRG (toPRG)
+import Target.C64.D64 (toD64)
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -258,6 +260,83 @@ prop_branchOffsetForward =
     in  bytes !! 1 == 0x01
 
 -- ---------------------------------------------------------------------------
+-- PRG generation (3 props)
+-- ---------------------------------------------------------------------------
+
+prop_prgLength :: Word16 -> [Word8] -> Property
+prop_prgLength addr bs =
+    length bs < 1000 ==>
+        length (toPRG addr bs) == length bs + 2
+
+prop_prgHeader :: Word16 -> Bool
+prop_prgHeader addr =
+    let prg = toPRG addr [0x42]
+    in  prg !! 0 == lo addr && prg !! 1 == hi addr
+
+prop_prgPayload :: Word16 -> [Word8] -> Property
+prop_prgPayload addr bs =
+    length bs < 1000 ==>
+        drop 2 (toPRG addr bs) == bs
+
+-- ---------------------------------------------------------------------------
+-- D64 generation (4 props)
+-- ---------------------------------------------------------------------------
+
+prop_d64ImageSize :: [Word8] -> Property
+prop_d64ImageSize bs =
+    length bs < 5000 ==>
+        let prg = toPRG 0x0801 bs
+        in  length (toD64 "TEST" prg) == 174848
+
+prop_d64BamHeader :: Bool
+prop_d64BamHeader =
+    let img = toD64 "TEST" [0x01, 0x08]
+        -- BAM is at track 18 sector 0.  Track 18 starts after tracks 1-17.
+        -- Tracks 1-17: 17 * 21 = 357 sectors.  Offset = 357 * 256 = 91392.
+        bamOffset = 91392
+    in  img !! bamOffset == 18           -- directory pointer: track 18
+     && img !! (bamOffset + 1) == 1      -- directory pointer: sector 1
+     && img !! (bamOffset + 2) == 0x41   -- DOS version 'A'
+
+prop_d64DirectoryFileType :: Bool
+prop_d64DirectoryFileType =
+    let img = toD64 "TEST" [0x01, 0x08, 0xEA]
+        -- Directory is at track 18 sector 1.  Offset = (357 + 1) * 256 = 91648.
+        dirOffset = 91648
+    in  img !! (dirOffset + 2) == 0x82   -- closed PRG
+
+prop_d64RoundTrip :: [Word8] -> Property
+prop_d64RoundTrip payload =
+    length payload > 0 && length payload < 2000 ==>
+        let prg = toPRG 0x0801 payload
+            img = toD64 "TEST" prg
+            -- Follow T/S chain starting from directory entry
+            dirOffset = 91648
+            firstTrack  = fromIntegral (img !! (dirOffset + 3)) :: Int
+            firstSector = fromIntegral (img !! (dirOffset + 4)) :: Int
+            extracted = followChain img (firstTrack, firstSector)
+        in  extracted == prg
+  where
+    -- Compute absolute byte offset for a (track, sector) pair.
+    -- Tracks 1-17: 21 sectors each, 18-24: 19, 25-30: 18, 31-35: 17.
+    tsOffset :: (Int, Int) -> Int
+    tsOffset (t, s) =
+        let spt = [0] ++ replicate 17 21 ++ replicate 7 19
+                       ++ replicate 6 18 ++ replicate 5 17
+        in  (sum (take t spt) + s) * 256
+
+    followChain :: [Word8] -> (Int, Int) -> [Word8]
+    followChain img (t, s)
+        | t == 0    = []  -- should not happen for first call
+        | otherwise =
+            let off = tsOffset (t, s)
+                nextT = fromIntegral (img !! off) :: Int
+                nextS = fromIntegral (img !! (off + 1)) :: Int
+            in  if nextT == 0
+                then take (nextS - 1) (drop (off + 2) img)  -- last sector
+                else take 254 (drop (off + 2) img) ++ followChain img (nextT, nextS)
+
+-- ---------------------------------------------------------------------------
 -- Test runner
 -- ---------------------------------------------------------------------------
 
@@ -309,6 +388,17 @@ main = do
         , checkOnce "forward branch (mdo)"     prop_forwardBranchMdo
         , checkOnce "backward offset byte"     prop_branchOffsetBackward
         , checkOnce "forward offset byte"      prop_branchOffsetForward
+
+        , section "PRG generation"
+        , check "prg length = input + 2"   prop_prgLength
+        , checkOnce "prg header matches lo/hi" prop_prgHeader
+        , check "prg payload preserved"    prop_prgPayload
+
+        , section "D64 generation"
+        , check "d64 image size = 174848"  prop_d64ImageSize
+        , checkOnce "d64 BAM header bytes"     prop_d64BamHeader
+        , checkOnce "d64 directory file type"  prop_d64DirectoryFileType
+        , check "d64 round-trip T/S chain" prop_d64RoundTrip
         ]
     if ok then putStrLn "\nAll properties passed."
           else putStrLn "\nSome properties FAILED." >> exitFailure

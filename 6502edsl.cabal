@@ -57,6 +57,8 @@ common warnings
 library
     import:           warnings
     exposed-modules:  Target.C64
+                    , Target.C64.PRG
+                    , Target.C64.D64
                     , ISA.Mos6502
                     , Asm.Monad
                     , Asm.Mos6502
@@ -70,6 +72,7 @@ executable 6502edsl
     main-is:          Main.hs
     build-depends:    base ^>=4.20.0.0
                     , 6502edsl
+                    , bytestring
                     , containers
     hs-source-dirs:   app
     default-language: GHC2024

@@ -4,9 +4,12 @@ module Main where
 
 import Data.Word (Word8)
 import Numeric (showHex)
+import qualified Data.ByteString as BS
 
 import Asm.Monad (assemble, label)
 import Asm.Mos6502
+import Target.C64.PRG (toPRG)
+import Target.C64.D64 (toD64)
 
 main :: IO ()
 main = do
@@ -63,6 +66,15 @@ main = do
     putStrLn "Test 4 — LDA all 8 addressing modes:"
     putStrLn $ "  " ++ hexDump bytes4
     putStrLn $ "  expected: A9 42 A5 80 B5 80 AD 34 12 BD 34 12 B9 34 12 A1 80 B1 80"
+    putStrLn ""
+
+    -- Write Test 1 program as a D64 disk image
+    let origin  = 0x0800
+        prg     = toPRG origin bytes1
+        d64     = toD64 "SETCOLORS" prg
+        d64File = "setcolors.d64"
+    BS.writeFile d64File (BS.pack d64)
+    putStrLn $ "Wrote " ++ d64File ++ " (" ++ show (length d64) ++ " bytes)"
 
 hexDump :: [Word8] -> String
 hexDump = unwords . map (\b -> pad2 (showHex b ""))
