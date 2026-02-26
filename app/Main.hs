@@ -3,6 +3,7 @@ module Main where
 import Data.Set qualified as Set
 import Numeric (showHex)
 
+import ISA.Mos6502
 import Target.C64
 
 main :: IO ()
@@ -11,6 +12,10 @@ main = do
         noBasic = c64TargetConfig defaultC64Subsystems { useBasic = False }
         bare    = c64TargetConfig defaultC64Subsystems
                     { useBasic = False, useKernal = False }
+
+    let sample = Instruction LDA (Immediate 0x42)
+    putStrLn $ "Sample instruction: " ++ show sample
+    putStrLn ""
 
     putStrLn "=== C64 Zero Page Allocation ==="
     putStrLn ""

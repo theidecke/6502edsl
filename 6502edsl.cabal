@@ -57,6 +57,7 @@ common warnings
 library
     import:           warnings
     exposed-modules:  Target.C64
+                    , ISA.Mos6502
     build-depends:    base ^>=4.20.0.0
                     , containers
     hs-source-dirs:   src
