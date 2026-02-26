@@ -1,5 +1,33 @@
 # 6502 Haskell embedded DSL
 
+## Setup
+
+Install prerequisites (Ubuntu/Debian):
+
+```bash
+sudo apt install build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev libncurses5 libtinfo5 pkg-config
+```
+
+Install [ghcup](https://www.haskell.org/ghcup/):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+```
+
+Install GHC 9.10.1 and set it as default:
+
+```bash
+ghcup install ghc 9.10.1
+ghcup set ghc 9.10.1
+```
+
+ghcup also installs `cabal-install`. Verify your toolchain:
+
+```bash
+ghc --version    # 9.10.1
+cabal --version
+```
+
 ## Development
 
 ```bash
