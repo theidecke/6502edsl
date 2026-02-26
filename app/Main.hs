@@ -1,33 +1,71 @@
+{-# LANGUAGE RecursiveDo #-}
+
 module Main where
 
-import Data.Set qualified as Set
+import Data.Word (Word8)
 import Numeric (showHex)
 
-import ISA.Mos6502
-import Target.C64
+import Asm.Monad (assemble, label)
+import Asm.Mos6502
 
 main :: IO ()
 main = do
-    let allOn   = c64TargetConfig defaultC64Subsystems
-        noBasic = c64TargetConfig defaultC64Subsystems { useBasic = False }
-        bare    = c64TargetConfig defaultC64Subsystems
-                    { useBasic = False, useKernal = False }
-
-    let sample = Instruction LDA (Immediate 0x42)
-    putStrLn $ "Sample instruction: " ++ show sample
+    -- Test 1: Linear program — init + set border/background colors
+    -- SEI; CLD; LDX #$FF; TXS; LDA #$00; STA $D020; STA $D021; RTS
+    let (_, bytes1) = assemble 0x0800 $ do
+            sei
+            cld
+            ldx (Imm 0xFF)
+            txs
+            lda (Imm 0x00)
+            sta (Abs 0xD020)
+            sta (Abs 0xD021)
+            rts
+    putStrLn "Test 1 — linear program (init + set colors):"
+    putStrLn $ "  " ++ hexDump bytes1
+    putStrLn $ "  expected: 78 D8 A2 FF 9A A9 00 8D 20 D0 8D 21 D0 60"
     putStrLn ""
 
-    putStrLn "=== C64 Zero Page Allocation ==="
+    -- Test 2: Forward branch via mdo
+    -- LDA $10; BEQ skip; LDA #$FF; skip: RTS
+    let (_, bytes2) = assemble 0x0800 $ mdo
+            lda (ZP 0x10)
+            beq skip
+            lda (Imm 0xFF)
+            skip <- label
+            rts
+    putStrLn "Test 2 — forward branch (mdo):"
+    putStrLn $ "  " ++ hexDump bytes2
+    putStrLn $ "  expected: A5 10 F0 02 A9 FF 60"
     putStrLn ""
-    printConfig "All subsystems ON" allOn
-    printConfig "BASIC OFF" noBasic
-    printConfig "BASIC + KERNAL OFF" bare
 
-printConfig :: String -> TargetConfig -> IO ()
-printConfig label cfg = do
-    let addrs = Set.toAscList (freeZeroPage cfg)
-    putStrLn $ label ++ " (" ++ show (length addrs) ++ " bytes free):"
-    putStrLn $ "  " ++ unwords (map fmt addrs)
+    -- Test 3: Backward branch (loop)
+    -- loop: DEX; BNE loop
+    let (_, bytes3) = assemble 0x0800 $ do
+            loop <- label
+            dex
+            bne loop
+    putStrLn "Test 3 — backward branch (loop):"
+    putStrLn $ "  " ++ hexDump bytes3
+    putStrLn $ "  expected: CA D0 FD"
     putStrLn ""
+
+    -- Test 4: LDA with all 8 addressing modes
+    let (_, bytes4) = assemble 0x0800 $ do
+            lda (Imm  0x42)
+            lda (ZP   0x80)
+            lda (ZPX  0x80)
+            lda (Abs  0x1234)
+            lda (AbsX 0x1234)
+            lda (AbsY 0x1234)
+            lda (IndX 0x80)
+            lda (IndY 0x80)
+    putStrLn "Test 4 — LDA all 8 addressing modes:"
+    putStrLn $ "  " ++ hexDump bytes4
+    putStrLn $ "  expected: A9 42 A5 80 B5 80 AD 34 12 BD 34 12 B9 34 12 A1 80 B1 80"
+
+hexDump :: [Word8] -> String
+hexDump = unwords . map (\b -> pad2 (showHex b ""))
   where
-    fmt w = '$' : showHex w ""
+    pad2 [c] = ['0', c]
+    pad2 s   = s
