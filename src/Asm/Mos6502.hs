@@ -44,6 +44,7 @@ module Asm.Mos6502
 
 import Data.Map.Strict qualified as Map
 import Data.Word (Word8, Word16)
+import Numeric (showHex)
 
 import Asm.Monad (ASM, emit, label, lo, hi, allocZP)
 import ISA.Mos6502 (Opcode(..))
@@ -319,8 +320,19 @@ emitAccum opc = emit [opcodeFor opc MAccumulator]
 emitBranch :: Opcode -> Word16 -> ASM ()
 emitBranch opc target = do
     pc <- label
-    let offset = fromIntegral (target - pc - 2) :: Word8
-    emit [opcodeFor opc MRelative, offset]
+    -- The range check is embedded in the byte value (not in a 'when' guard)
+    -- so it stays lazy and works correctly inside mdo/MonadFix blocks where
+    -- the target address is a forward reference resolved after assembly.
+    let diff = fromIntegral target - fromIntegral pc - 2 :: Int
+        byte | diff < -128 || diff > 127 =
+                 error $ show opc ++ " branch out of range: offset " ++ show diff
+                      ++ " (PC=$" ++ showHex16 pc
+                      ++ ", target=$" ++ showHex16 target ++ ")"
+             | otherwise = fromIntegral diff
+    emit [opcodeFor opc MRelative, byte]
+  where
+    showHex16 :: Word16 -> String
+    showHex16 w = let s = showHex w "" in replicate (4 - length s) '0' ++ s
 
 -- ---------------------------------------------------------------------------
 -- Operand instructions

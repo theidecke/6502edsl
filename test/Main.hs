@@ -280,6 +280,56 @@ prop_branchOffsetForward =
     in  bytes !! 1 == 0x01
 
 -- ---------------------------------------------------------------------------
+-- Branch range validation (4 props)
+-- ---------------------------------------------------------------------------
+
+prop_branchMaxForward :: Bool
+prop_branchMaxForward =
+    -- BEQ skip; 127 bytes of NOPs; skip:  →  offset byte is 0x7F (+127)
+    let bytes = asm $ mdo
+            beq skip
+            emit (replicate 127 0xEA)
+            skip <- label
+            pure ()
+    in  bytes !! 1 == 0x7F
+
+prop_branchMaxBackward :: Bool
+prop_branchMaxBackward =
+    -- 126 NOPs; loop: NOP; NOP; BNE loop  →  offset is -128 = 0x80
+    -- PC at BNE = 128, target = 126, diff = 126 - 128 - 2 = -4… let's compute:
+    -- We need: target - pc - 2 = -128, so pc - target = 126, meaning 126 bytes
+    -- between target and the branch + its operand.
+    -- loop: (1 NOP = 1 byte) then 125 NOPs, then BNE = offset -128
+    let bytes = asm $ do
+            loop <- label
+            emit (replicate 126 0xEA)
+            bne loop
+    in  let offset = bytes !! (126 + 1)  -- byte after BNE opcode
+        in  offset == 0x80  -- -128 as unsigned
+
+prop_branchOutOfRangeForward :: IO Bool
+prop_branchOutOfRangeForward = do
+    -- BEQ skip; 128 NOPs; skip:  →  offset +128, out of range
+    let bytes = asm $ mdo
+            beq skip
+            emit (replicate 128 0xEA)
+            skip <- label
+            pure ()
+    -- Force all byte values (not just the spine) to trigger the lazy error
+    result <- try (evaluate (sum bytes)) :: IO (Either SomeException Word8)
+    pure $ isLeft result
+
+prop_branchOutOfRangeBackward :: IO Bool
+prop_branchOutOfRangeBackward = do
+    -- loop: 127 NOPs; BNE loop  →  offset -129, out of range
+    let bytes = asm $ do
+            loop <- label
+            emit (replicate 127 0xEA)
+            bne loop
+    result <- try (evaluate (sum bytes)) :: IO (Either SomeException Word8)
+    pure $ isLeft result
+
+-- ---------------------------------------------------------------------------
 -- Zero-page allocation (4 props)
 -- ---------------------------------------------------------------------------
 
@@ -895,6 +945,12 @@ main = do
         , checkOnce "forward branch (mdo)"     prop_forwardBranchMdo
         , checkOnce "backward offset byte"     prop_branchOffsetBackward
         , checkOnce "forward offset byte"      prop_branchOffsetForward
+
+        , section "Branch range validation"
+        , checkOnce "max forward (+127)"         prop_branchMaxForward
+        , checkOnce "max backward (-128)"        prop_branchMaxBackward
+        , checkIO   "out of range forward"       prop_branchOutOfRangeForward
+        , checkIO   "out of range backward"      prop_branchOutOfRangeBackward
 
         , section "Zero-page allocation"
         , checkOnce "single-byte allocation"     prop_allocZPSingleByte
