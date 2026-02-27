@@ -14,13 +14,17 @@ import Test.QuickCheck.Random (mkQCGen)
 
 import Data.Char (ord)
 
-import Asm.Monad (ASM, TargetConfig(..), assemble, emit, label, allocZP, lo, hi)
+import Control.Exception (evaluate, try, SomeException)
+
+import Asm.Monad (ASM, TargetConfig(..), assemble, assembleWithLabels, emit, label, allocZP, lo, hi)
 import Asm.Mos6502
-import Asm.Mos6502.Memory (align, alignPage)
+import Asm.Mos6502.Memory (align, alignPage, samePage)
 import Asm.Mos6502.Control (if_, if_eq, if_ne, if_cs, if_cc, if_pl, if_mi, while_, for_x, for_y, loop_)
+import Asm.Mos6502.Debug (fitsIn, annotate)
 import Asm.Mos6502.Ops16 (add16, sub16, inc16, dec16, cmp16, mov16, load16)
 import ISA.Mos6502 (Opcode(..))
 import Target.C64.Data (byte, word, petscii, pstring, charToPetscii)
+import Target.C64.Debug (exportViceLabels)
 import Target.C64.PRG (toPRG)
 import Target.C64.D64 (toD64)
 
@@ -729,6 +733,117 @@ prop_cmp16Bytes =
     in  bytes == [0xA5, 0x02, 0xC5, 0x04, 0xA5, 0x03, 0xE5, 0x05]
 
 -- ---------------------------------------------------------------------------
+-- VICE label export (3 props)
+-- ---------------------------------------------------------------------------
+
+prop_viceLabelsFormat :: Bool
+prop_viceLabelsFormat =
+    exportViceLabels [("main", 0x0810), ("loop", 0x0820)]
+    == "al C:0810 .main\nal C:0820 .loop\n"
+
+prop_viceLabelsEmpty :: Bool
+prop_viceLabelsEmpty = exportViceLabels [] == ""
+
+prop_viceLabelsLeadingZeros :: Bool
+prop_viceLabelsLeadingZeros =
+    exportViceLabels [("start", 0x0010)] == "al C:0010 .start\n"
+
+-- ---------------------------------------------------------------------------
+-- samePage (2 props)
+-- ---------------------------------------------------------------------------
+
+prop_samePagePasses :: Bool
+prop_samePagePasses =
+    -- origin $0800, samePage $08FF → no error, no bytes
+    snd (assemble (simpleConfig 0x0800) (samePage 0x08FF)) == []
+
+prop_samePageFails :: IO Bool
+prop_samePageFails = do
+    -- origin $08FF, emit 2 bytes → PC=$0901, samePage $0800 → error
+    let prog = do emit [0x00, 0x00]; samePage 0x0800
+        bytes = snd (assemble (simpleConfig 0x08FF) prog)
+    result <- try (evaluate (length bytes)) :: IO (Either SomeException Int)
+    pure $ isLeft result
+
+-- ---------------------------------------------------------------------------
+-- fitsIn (4 props)
+-- ---------------------------------------------------------------------------
+
+prop_fitsInPasses :: Bool
+prop_fitsInPasses =
+    snd (assemble (simpleConfig 0x0000) (fitsIn 5 (nop >> nop))) == [0xEA, 0xEA]
+
+prop_fitsInFails :: IO Bool
+prop_fitsInFails = do
+    let prog = fitsIn 1 (nop >> nop)
+        bytes = snd (assemble (simpleConfig 0x0000) prog)
+    result <- try (evaluate (length bytes)) :: IO (Either SomeException Int)
+    pure $ isLeft result
+
+prop_fitsInExact :: Bool
+prop_fitsInExact =
+    snd (assemble (simpleConfig 0x0000) (fitsIn 1 nop)) == [0xEA]
+
+prop_fitsInPreservesResult :: Bool
+prop_fitsInPreservesResult =
+    let cfg = simpleConfig 0x0800
+        (pc, _) = assemble cfg (fitsIn 10 (lda # 0x42 >> label))
+    in  pc == 0x0802
+
+-- ---------------------------------------------------------------------------
+-- annotate (3 props)
+-- ---------------------------------------------------------------------------
+
+prop_annotateRecordsLabel :: Bool
+prop_annotateRecordsLabel =
+    let cfg = simpleConfig 0x0800
+        (_, _, labels) = assembleWithLabels cfg (annotate "main" nop)
+    in  labels == [("main", 0x0800)]
+
+prop_annotateMultiple :: Bool
+prop_annotateMultiple =
+    let cfg = simpleConfig 0x0800
+        (_, _, labels) = assembleWithLabels cfg $ do
+            annotate "first" nop
+            annotate "second" nop
+    in  labels == [("first", 0x0800), ("second", 0x0801)]
+
+prop_annotatePreservesResult :: Bool
+prop_annotatePreservesResult =
+    let cfg = zpConfig [0x10..0x19]
+        (v, _, _) = assembleWithLabels cfg (annotate "x" allocVar8)
+    in  v == Var8 0x10
+
+-- ---------------------------------------------------------------------------
+-- assembleWithLabels (2 props)
+-- ---------------------------------------------------------------------------
+
+prop_assembleWithLabelsSameBytes :: Bool
+prop_assembleWithLabelsSameBytes =
+    let cfg = simpleConfig 0x0800
+        prog = nop >> nop >> rts
+        (_, bytesA) = assemble cfg prog
+        (_, bytesB, _) = assembleWithLabels cfg prog
+    in  bytesA == bytesB
+
+prop_assembleWithLabelsOrder :: Bool
+prop_assembleWithLabelsOrder =
+    let cfg = simpleConfig 0x0800
+        (_, _, labels) = assembleWithLabels cfg $ do
+            annotate "a" nop
+            annotate "b" nop
+            annotate "c" nop
+    in  map fst labels == ["a", "b", "c"]
+
+-- ---------------------------------------------------------------------------
+-- Helpers for testing error cases
+-- ---------------------------------------------------------------------------
+
+isLeft :: Either a b -> Bool
+isLeft (Left _)  = True
+isLeft (Right _) = False
+
+-- ---------------------------------------------------------------------------
 -- Test runner
 -- ---------------------------------------------------------------------------
 
@@ -865,6 +980,30 @@ main = do
         , checkOnce "sub16 bytes"               prop_sub16Bytes
         , checkOnce "mov16 bytes"               prop_mov16Bytes
         , checkOnce "cmp16 bytes"               prop_cmp16Bytes
+
+        , section "VICE label export"
+        , checkOnce "format check"              prop_viceLabelsFormat
+        , checkOnce "empty list"                prop_viceLabelsEmpty
+        , checkOnce "leading zeros"             prop_viceLabelsLeadingZeros
+
+        , section "samePage assertion"
+        , checkOnce "same page passes"          prop_samePagePasses
+        , checkIO   "different page fails"      prop_samePageFails
+
+        , section "fitsIn assertion"
+        , checkOnce "within limit passes"       prop_fitsInPasses
+        , checkIO   "exceeds limit fails"       prop_fitsInFails
+        , checkOnce "exact limit passes"        prop_fitsInExact
+        , checkOnce "return value preserved"    prop_fitsInPreservesResult
+
+        , section "annotate"
+        , checkOnce "records label"             prop_annotateRecordsLabel
+        , checkOnce "multiple annotations"      prop_annotateMultiple
+        , checkOnce "preserves result"          prop_annotatePreservesResult
+
+        , section "assembleWithLabels"
+        , checkOnce "same bytes as assemble"    prop_assembleWithLabelsSameBytes
+        , checkOnce "labels in source order"    prop_assembleWithLabelsOrder
         ]
     if ok then putStrLn "\nAll properties passed."
           else putStrLn "\nSome properties FAILED." >> exitFailure
@@ -889,3 +1028,10 @@ checkWith args name prop = do
 
 checkOnce :: Testable prop => String -> prop -> IO Bool
 checkOnce = checkWith detArgs { maxSuccess = 1 }
+
+checkIO :: String -> IO Bool -> IO Bool
+checkIO name action = do
+    putStr $ "  " ++ name ++ ": "
+    ok <- action
+    putStrLn $ if ok then "+++ OK" else "*** FAILED"
+    pure ok

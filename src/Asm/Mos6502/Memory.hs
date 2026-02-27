@@ -1,4 +1,9 @@
-module Asm.Mos6502.Memory (align, alignPage) where
+module Asm.Mos6502.Memory (align, alignPage, samePage) where
+
+import Data.Bits ((.&.))
+import Data.Word (Word16)
+import Control.Monad (when)
+import Numeric (showHex)
 
 import Asm.Monad (ASM, emit, label)
 
@@ -17,3 +22,16 @@ align n
 -- that must not cross page boundaries).
 alignPage :: ASM ()
 alignPage = align 256
+
+-- | Assert that the current PC and the given address are on the same
+-- 256-byte page. Fails at assembly time if they differ.
+samePage :: Word16 -> ASM ()
+samePage addr = do
+    pc <- label
+    when ((pc .&. 0xFF00) /= (addr .&. 0xFF00)) $
+        error $ "samePage: PC=$" ++ showHex16 pc
+             ++ " and address=$" ++ showHex16 addr
+             ++ " are on different pages"
+  where
+    showHex16 :: Word16 -> String
+    showHex16 w = let s = showHex w "" in replicate (4 - length s) '0' ++ s

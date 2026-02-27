@@ -59,6 +59,7 @@ library
     exposed-modules:  Target.C64
                     , Target.C64.PRG
                     , Target.C64.D64
+                    , Target.C64.Debug
                     , Target.C64.Mem
                     , Target.C64.Mem.VIC
                     , Target.C64.Mem.SID
@@ -71,6 +72,7 @@ library
                     , Asm.Mos6502
                     , Asm.Mos6502.Memory
                     , Asm.Mos6502.Control
+                    , Asm.Mos6502.Debug
                     , Asm.Mos6502.Ops16
                     , Target.C64.Data
     build-depends:    base ^>=4.20.0.0

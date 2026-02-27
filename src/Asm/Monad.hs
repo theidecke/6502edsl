@@ -4,6 +4,8 @@ module Asm.Monad
     , emit
     , label
     , assemble
+    , assembleWithLabels
+    , recordLabel
     , allocZP
     , lo
     , hi
@@ -21,10 +23,11 @@ data TargetConfig = TargetConfig
     , freeZeroPage :: Set Word8
     } deriving (Show)
 
--- | Internal assembler state: program counter + free zero-page set.
+-- | Internal assembler state: program counter + free zero-page set + labels.
 data AsmState = AsmState
     { asmPC     :: !Word16
     , asmFreeZP :: !(Set Word8)
+    , asmLabels :: ![(String, Word16)]
     }
 
 -- | The assembler monad. Carries assembler state and a difference list
@@ -77,12 +80,26 @@ emit bs = ASM $ \s ->
 label :: ASM Word16
 label = ASM $ \s -> (asmPC s, s, mempty)
 
+-- | Run an assembly block, returning the result, emitted bytes, and
+-- collected labels (from 'recordLabel' / 'annotate').
+assembleWithLabels :: TargetConfig -> ASM a -> (a, [Word8], [(String, Word16)])
+assembleWithLabels cfg (ASM f) =
+    let s0 = AsmState { asmPC = origin cfg, asmFreeZP = freeZeroPage cfg
+                       , asmLabels = [] }
+        (a, s, Endo dl) = f s0
+    in  (a, dl [], reverse (asmLabels s))
+
 -- | Run an assembly block with the given target configuration.
 assemble :: TargetConfig -> ASM a -> (a, [Word8])
-assemble cfg (ASM f) =
-    let s0 = AsmState { asmPC = origin cfg, asmFreeZP = freeZeroPage cfg }
-        (a, _s, Endo dl) = f s0
-    in  (a, dl [])
+assemble cfg prog =
+    let (a, bs, _labels) = assembleWithLabels cfg prog
+    in  (a, bs)
+
+-- | Record a named label at the given address.
+-- Used by 'annotate' to collect debug symbols.
+recordLabel :: String -> Word16 -> ASM ()
+recordLabel name addr = ASM $ \s ->
+    ((), s { asmLabels = (name, addr) : asmLabels s }, mempty)
 
 -- | Allocate @n@ contiguous bytes from the free zero-page region.
 -- Returns the start address. Fails at assembly time if no contiguous

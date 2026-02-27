@@ -289,6 +289,53 @@ Available operations:
 - `mov16 dst src` — copy
 - `cmp16 a b` — unsigned compare (sets carry for `a >= b`)
 
+### Debug and Assertions
+
+`Asm.Mos6502.Debug` provides compile-time assertions and code annotation for debugging.
+
+**Size assertions** — verify a block fits within a byte budget:
+
+```haskell
+fitsIn 256 $ do
+    -- lookup table that must fit in one page
+    byte [0..255]
+```
+
+If the block exceeds the limit, assembly fails with an error.
+
+**Page-boundary assertions** — verify the PC is on the same page as an address:
+
+```haskell
+tableStart <- label
+byte sineTable
+samePage tableStart    -- error if table crossed a page boundary
+```
+
+`samePage` is in `Asm.Mos6502.Memory`.
+
+**Code annotation** — name regions for debug symbol export:
+
+```haskell
+let cfg = c64TargetConfig 0xC000 defaultC64Subsystems
+    (_, bytes, labels) = assembleWithLabels cfg $ do
+        annotate "init" $ do
+            sei; cld
+        annotate "mainLoop" $ do
+            loop_ nop
+```
+
+**VICE symbol file export** — generate monitor symbol files from collected labels:
+
+```haskell
+let symbols = exportViceLabels labels
+writeFile "program.vs" symbols
+-- File contents:
+-- al C:C000 .init
+-- al C:C002 .mainLoop
+```
+
+Load in VICE with `mon_commands "program.vs"` or via the monitor command `ll "program.vs"`.
+
 ### C64 Memory Map
 
 `Target.C64.Mem` exports named constants for the full C64 memory map:
