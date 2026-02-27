@@ -59,6 +59,13 @@ library
     exposed-modules:  Target.C64
                     , Target.C64.PRG
                     , Target.C64.D64
+                    , Target.C64.Mem
+                    , Target.C64.Mem.VIC
+                    , Target.C64.Mem.SID
+                    , Target.C64.Mem.CIA1
+                    , Target.C64.Mem.CIA2
+                    , Target.C64.Mem.Kernal
+                    , Target.C64.Mem.System
                     , ISA.Mos6502
                     , Asm.Monad
                     , Asm.Mos6502

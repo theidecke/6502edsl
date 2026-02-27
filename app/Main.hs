@@ -9,6 +9,7 @@ import qualified Data.ByteString as BS
 import Asm.Monad (TargetConfig(..), assemble, label)
 import Asm.Mos6502
 import Target.C64 (c64TargetConfig, defaultC64Subsystems, C64Subsystems(..))
+import Target.C64.Mem (vicBorderColor, vicBackgroundColor0, colorBlack)
 import Target.C64.PRG (toPRG)
 import Target.C64.D64 (toD64)
 
@@ -22,9 +23,9 @@ main = do
             cld
             ldx # 0xFF
             txs
-            lda # 0x00
-            sta (0xD020 :: Word16)
-            sta (0xD021 :: Word16)
+            lda # colorBlack
+            sta vicBorderColor
+            sta vicBackgroundColor0
             loop <- label
             jmp loop
 
