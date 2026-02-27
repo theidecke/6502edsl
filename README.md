@@ -33,9 +33,10 @@ cabal --version
 ## Development
 
 ```bash
-cabal build          # Build everything
-cabal run 6502edsl   # Run the executable (writes hello.d64)
-cabal test           # Run the test suite
+cabal build            # Build everything
+cabal run main         # Run the executable (writes hello.d64)
+cabal run color-washer # Run the color-wash demo (writes color-washer.d64)
+cabal test             # Run the test suite
 ```
 
 ### REPL
@@ -49,7 +50,7 @@ cabal repl 6502edsl
 Load the executable (gives you `main` plus all library modules):
 
 ```bash
-cabal repl exe:6502edsl
+cabal repl exe:main
 ```
 
 ## Quick Start
@@ -96,7 +97,7 @@ program = do
     loop_ nop
 ```
 
-Run `cabal run 6502edsl` to produce `hello.d64`, which can be loaded in VICE or transferred to real hardware.
+Run `cabal run main` to produce `hello.d64`, which can be loaded in VICE or transferred to real hardware.
 
 ## DSL Reference
 

@@ -80,7 +80,7 @@ library
     hs-source-dirs:   src
     default-language: GHC2024
 
-executable 6502edsl
+executable main
     import:           warnings
     main-is:          Main.hs
     build-depends:    base ^>=4.20.0.0
@@ -88,6 +88,15 @@ executable 6502edsl
                     , bytestring
                     , containers
     hs-source-dirs:   app
+    default-language: GHC2024
+
+executable color-washer
+    import:           warnings
+    main-is:          ColorWasher.hs
+    hs-source-dirs:   examples
+    build-depends:    base ^>=4.20.0.0
+                    , 6502edsl
+                    , bytestring
     default-language: GHC2024
 
 test-suite 6502edsl-test

@@ -10,10 +10,10 @@ Haskell embedded DSL for writing 6502 assembly code, targeting the Commodore 64.
 
 ```bash
 cabal build            # Build the project (library + executable)
-cabal run 6502edsl     # Run the executable (writes hello.d64 + hello.vs)
+cabal run main         # Run the executable (writes hello.d64 + hello.vs)
 cabal test             # Run the QuickCheck test suite (~100 properties)
 cabal repl             # Interactive GHC REPL (library modules)
-cabal repl exe:6502edsl  # REPL with executable + library
+cabal repl exe:main      # REPL with executable + library
 cabal clean            # Clean build artifacts
 ```
 
