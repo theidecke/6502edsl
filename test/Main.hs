@@ -543,31 +543,44 @@ prop_d64RoundTrip payload =
     length payload > 0 && length payload < 2000 ==>
         let prg = toPRG 0x0801 payload
             img = toD64 "TEST" prg
-            -- Follow T/S chain starting from directory entry
-            dirOffset = 91648
-            firstTrack  = fromIntegral (img !! (dirOffset + 3)) :: Int
-            firstSector = fromIntegral (img !! (dirOffset + 4)) :: Int
-            extracted = followChain img (firstTrack, firstSector)
+            extracted = d64Extract img
         in  extracted == prg
-  where
-    -- Compute absolute byte offset for a (track, sector) pair.
-    -- Tracks 1-17: 21 sectors each, 18-24: 19, 25-30: 18, 31-35: 17.
-    tsOffset :: (Int, Int) -> Int
-    tsOffset (t, s) =
-        let spt = [0] ++ replicate 17 21 ++ replicate 7 19
-                       ++ replicate 6 18 ++ replicate 5 17
-        in  (sum (take t spt) + s) * 256
 
-    followChain :: [Word8] -> (Int, Int) -> [Word8]
-    followChain img (t, s)
-        | t == 0    = []  -- should not happen for first call
-        | otherwise =
-            let off = tsOffset (t, s)
-                nextT = fromIntegral (img !! off) :: Int
-                nextS = fromIntegral (img !! (off + 1)) :: Int
-            in  if nextT == 0
-                then take (nextS - 1) (drop (off + 2) img)  -- last sector
-                else take 254 (drop (off + 2) img) ++ followChain img (nextT, nextS)
+prop_d64RoundTripLarge :: Bool
+prop_d64RoundTripLarge =
+    let payload = [fromIntegral (i `mod` 251) :: Word8 | i <- [0 :: Int .. 30719]]
+        prg = toPRG 0x0801 payload
+        img = toD64 "TEST" prg
+        extracted = d64Extract img
+    in  extracted == prg
+
+-- | Extract the first file's PRG data from a D64 image by following the T/S chain.
+d64Extract :: [Word8] -> [Word8]
+d64Extract img =
+    let dirOffset = 91648
+        firstTrack  = fromIntegral (img !! (dirOffset + 3)) :: Int
+        firstSector = fromIntegral (img !! (dirOffset + 4)) :: Int
+    in  followChain img (firstTrack, firstSector)
+
+-- | Compute absolute byte offset for a (track, sector) pair.
+-- Tracks 1-17: 21 sectors each, 18-24: 19, 25-30: 18, 31-35: 17.
+tsOffset :: (Int, Int) -> Int
+tsOffset (t, s) =
+    let spt = [0] ++ replicate 17 21 ++ replicate 7 19
+                   ++ replicate 6 18 ++ replicate 5 17
+    in  (sum (take t spt) + s) * 256
+
+-- | Follow a D64 T/S chain and collect all data bytes.
+followChain :: [Word8] -> (Int, Int) -> [Word8]
+followChain img (t, s)
+    | t == 0    = []  -- should not happen for first call
+    | otherwise =
+        let off = tsOffset (t, s)
+            nextT = fromIntegral (img !! off) :: Int
+            nextS = fromIntegral (img !! (off + 1)) :: Int
+        in  if nextT == 0
+            then take (nextS - 1) (drop (off + 2) img)  -- last sector
+            else take 254 (drop (off + 2) img) ++ followChain img (nextT, nextS)
 
 -- ---------------------------------------------------------------------------
 -- Asm.Mos6502.Memory (6 props)
@@ -711,6 +724,30 @@ prop_whileBytes =
     -- top@0: C9 05, beq exit@2: F0 04, nop@4: EA, jmp top@5: 4C 00 00, exit@8
     asm (while_ beq (cmp # 0x05) nop)
     == [0xC9, 0x05, 0xF0, 0x04, 0xEA, 0x4C, 0x00, 0x00]
+
+-- if_eq with multi-byte then/else blocks
+prop_ifEqMultiByteBodies :: Bool
+prop_ifEqMultiByteBodies =
+    -- BNE +7, LDA #$01, STA $80, JMP $000D, LDA #$02, STA $81
+    asm (if_eq (lda # 0x01 >> sta (0x80 :: Word8))
+               (lda # 0x02 >> sta (0x81 :: Word8)))
+    == [ 0xD0, 0x07                     -- BNE elseStart (skip 4+3)
+       , 0xA9, 0x01, 0x85, 0x80        -- then: LDA #$01, STA $80
+       , 0x4C, 0x0D, 0x00              -- JMP end
+       , 0xA9, 0x02, 0x85, 0x81        -- else: LDA #$02, STA $81
+       ]
+
+-- while_ with multi-instruction condition and body
+prop_whileMultiByteBody :: Bool
+prop_whileMultiByteBody =
+    -- top: LDA $80, CMP #$05, BEQ exit, INC $80, INC $81, JMP top, exit:
+    asm (while_ beq (lda (0x80 :: Word8) >> cmp # 0x05)
+                    (inc (0x80 :: Word8) >> inc (0x81 :: Word8)))
+    == [ 0xA5, 0x80, 0xC9, 0x05        -- cond: LDA $80, CMP #$05
+       , 0xF0, 0x07                     -- BEQ exit (skip 4+3)
+       , 0xE6, 0x80, 0xE6, 0x81        -- body: INC $80, INC $81
+       , 0x4C, 0x00, 0x00              -- JMP top
+       ]
 
 -- ---------------------------------------------------------------------------
 -- Asm.Mos6502.Ops16 (7 props)
@@ -990,6 +1027,7 @@ main = do
         , checkOnce "d64 BAM header bytes"     prop_d64BamHeader
         , checkOnce "d64 directory file type"  prop_d64DirectoryFileType
         , check "d64 round-trip T/S chain" prop_d64RoundTrip
+        , checkOnce "d64 round-trip large (~30KB)" prop_d64RoundTripLarge
 
         , section "Memory alignment"
         , checkOnce "align already aligned"     prop_alignAlreadyAligned
@@ -1027,6 +1065,8 @@ main = do
         , checkOnce "for_x multi-byte body"     prop_forXMultiByteBody
         , checkOnce "loop_ bytes"               prop_loopBytes
         , checkOnce "while_ bytes"              prop_whileBytes
+        , checkOnce "if_eq multi-byte bodies"   prop_ifEqMultiByteBodies
+        , checkOnce "while_ multi-byte body"    prop_whileMultiByteBody
 
         , section "16-bit operations"
         , checkOnce "load16 bytes"              prop_load16Bytes

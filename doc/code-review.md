@@ -12,34 +12,13 @@ The findings below are organized by severity: correctness issues first, then rob
 
 ## Correctness Issues
 
-### 1. Branch offset calculation silently wraps on out-of-range targets
+### ~~1. Branch offset calculation silently wraps on out-of-range targets~~ (fixed)
 
-**File**: `src/Asm/Mos6502.hs:321-323`
+Fixed in commit 6c9b6ca. `emitBranch` now validates the offset is within [-128, +127] and errors with a diagnostic message including PC and target addresses. Covered by `prop_branchMaxForward`, `prop_branchMaxBackward`, `prop_branchOutOfRangeForward`, and `prop_branchOutOfRangeBackward`.
 
-```haskell
-emitBranch :: Opcode -> Word16 -> ASM ()
-emitBranch opc target = do
-    pc <- label
-    let offset = fromIntegral (target - pc - 2) :: Word8
-    emit [opcodeFor opc MRelative, offset]
-```
+### ~~2. `cmp16` does not set carry before `SBC` on high byte~~ (not a bug)
 
-The 6502 branch offset is a signed `Int8` (-128 to +127), but this code casts to `Word8` without checking the range. If `target - pc - 2` falls outside [-128, +127], the offset silently wraps and the branch goes to the wrong address. The `doc/6502-edsl-plan.md` explicitly calls this out as needing validation.
-
-**Recommendation**: Add a range check and `error` if the offset exceeds signed byte range. This is an assembly-time error, consistent with how `fitsIn` and `samePage` already work.
-
-### 2. `cmp16` does not set carry before `SBC` on high byte
-
-**File**: `src/Asm/Mos6502/Ops16.hs:47-50`
-
-```haskell
-cmp16 :: Var16 -> Var16 -> ASM ()
-cmp16 a b = do
-    lda (lo16 a); cmp (lo16 b)
-    lda (hi16 a); sbc (hi16 b)
-```
-
-The `CMP` on the low byte sets carry correctly for unsigned comparison, and the `SBC` on the high byte borrows from that carry — this is actually the standard 6502 idiom for 16-bit unsigned comparison. However, the initial carry is not explicitly set. If the code preceding `cmp16` leaves carry in an unknown state, the `CMP` instruction always sets carry based on its comparison (carry is an *output* of `CMP`, not an input), so the low byte compare is fine. The `SBC` on the high byte then correctly uses the carry/borrow from `CMP`. This is actually correct as-is, matching the well-known 6502 pattern. No fix needed.
+Reviewed and confirmed correct — standard 6502 idiom for 16-bit unsigned comparison.
 
 ### 3. PETSCII mapping inconsistency between `Target.C64.Data` and `Target.C64.D64`
 
@@ -103,7 +82,7 @@ The entire D64 module works with `[Word8]` (linked lists). For a 174,848-byte di
 
 ### 8. No branch range relaxation
 
-The plan document (Part 1) mentions branch relaxation (expanding branches to branch-over-JMP sequences) as a future consideration. Currently, out-of-range branches silently produce wrong code (see item 1). For now, just adding range validation is the right call. True relaxation would require a multi-pass approach that conflicts with the current `MonadFix` design.
+The plan document (Part 1) mentions branch relaxation (expanding branches to branch-over-JMP sequences) as a future consideration. Out-of-range branches now error at assembly time (item 1, fixed). True relaxation would require a multi-pass approach that conflicts with the current `MonadFix` design.
 
 ### 9. `ISA.Mos6502` types are not used by the assembler
 
@@ -138,9 +117,6 @@ The plan document (Part 6) describes multi-segment support with `org` directives
 ### Suggestions
 
 - **No negative tests for invalid addressing modes**: Could verify that e.g. `sta (Imm 0x42)` is a compile-time type error (would need a separate compilation-failure test).
-- **Branch offset edge cases untested**: No test for a branch at exactly +127 or -128 offset, or for out-of-range branches (expected to fail — see item 1).
-- **D64 test scale**: `prop_d64RoundTrip` limits payload to <2000 bytes. A single test with a larger payload (~30KB, filling many tracks) would exercise multi-track allocation.
-- **Control flow with non-trivial bodies**: The `if_eq`/`while_` tests use `nop` bodies. A test with multi-byte bodies that cross branch range boundaries would be valuable.
 - **Orphan instance pragma**: `test/Main.hs` uses `{-# OPTIONS_GHC -fno-warn-orphans #-}` for `Arbitrary` instances on operand newtypes. This is reasonable for a test module.
 
 ---
@@ -174,9 +150,9 @@ The project compiles with `-Wall` and **zero warnings** across all 19 library mo
 
 ## Prioritized Recommendations
 
-1. **Add branch range validation** (item 1) — prevents silent wrong code generation
-2. **Comment the D64 PETSCII function** (item 3) — prevents future confusion
-3. **Add `HasCallStack` to `opcodeFor`** (item 6) — improves error diagnostics
-4. **Add branch edge-case tests** — strengthens the test suite
+1. ~~**Add branch range validation** (item 1)~~ — done
+2. ~~**Comment the D64 PETSCII function** (item 3)~~ — done
+3. ~~**Add `HasCallStack` to `opcodeFor`** (item 6)~~ — done
+4. ~~**Add branch edge-case tests**~~ — done
 5. **Consider BASIC stub** (item 11) — high usability impact, small implementation
 6. **Consider `org`/segment support** (item 12) — needed for more complex programs

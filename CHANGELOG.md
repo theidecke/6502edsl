@@ -2,6 +2,14 @@
 
 ## 0.2.0.0 -- 2026-02-27
 
+### Robustness
+* `HasCallStack` on `opcodeFor` for better error locations (`Asm.Mos6502`)
+* Clarifying comments on `toPETSCII` in `Target.C64.D64` and `findContiguous` in `Asm.Monad`
+
+### Testing
+* Large D64 round-trip test (~30KB payload spanning multiple tracks)
+* Multi-byte body tests for `if_eq` and `while_` control flow
+
 ### Debug and assertions
 * VICE monitor symbol file export (`exportViceLabels` in `Target.C64.Debug`)
 * Code annotation with `annotate` for naming regions (`Asm.Mos6502.Debug`)

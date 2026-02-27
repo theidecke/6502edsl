@@ -123,6 +123,8 @@ findContiguous n = go
     go [] = err
     go (a:as)
         | runLen >= n = a
+        -- Skip past the entire too-short contiguous run so we start
+        -- searching from the next disjoint group of free addresses.
         | otherwise   = go (drop runLen (a:as))
       where
         -- Count how many addresses form a contiguous run starting at @a@.

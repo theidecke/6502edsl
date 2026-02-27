@@ -93,7 +93,10 @@ buildDataSectors locations chunks = Map.fromList (zipWith3 mkSector locations ne
 -- PETSCII conversion
 -- ---------------------------------------------------------------------------
 
--- | Simple ASCII to PETSCII mapping (uppercase mode).
+-- | ASCII to PETSCII for disk\/file names: folds lowercase to uppercase
+-- and falls back to space for unsupported characters.  This differs from
+-- 'Target.C64.Data.charToPetscii', which maps lowercase to PETSCII
+-- @$C1-$DA@ and errors on unsupported input.
 toPETSCII :: Char -> Word8
 toPETSCII c
     | c >= 'A' && c <= 'Z' = fromIntegral (fromEnum c)  -- $41-$5A (same as ASCII)

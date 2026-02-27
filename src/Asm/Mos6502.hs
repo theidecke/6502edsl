@@ -44,6 +44,7 @@ module Asm.Mos6502
 
 import Data.Map.Strict qualified as Map
 import Data.Word (Word8, Word16)
+import GHC.Stack (HasCallStack)
 import Numeric (showHex)
 
 import Asm.Monad (ASM, emit, label, lo, hi, allocZP)
@@ -297,7 +298,7 @@ opcodeTable = Map.fromList
     , ((TXS, MImplied), 0x9A), ((TYA, MImplied), 0x98)
     ]
 
-opcodeFor :: Opcode -> Mode -> Word8
+opcodeFor :: HasCallStack => Opcode -> Mode -> Word8
 opcodeFor opc mode =
     case Map.lookup (opc, mode) opcodeTable of
         Just byte -> byte
