@@ -310,6 +310,129 @@ prop_allocZPInMdo =
                  ]
 
 -- ---------------------------------------------------------------------------
+-- Addressing mode sugar (15+ props)
+-- ---------------------------------------------------------------------------
+
+-- # operator: lda # v == lda (Imm v)
+prop_sugarImmediate :: Word8 -> Bool
+prop_sugarImmediate v = asm (lda # v) == asm (lda (Imm v))
+
+-- Bare Word8: lda (w :: Word8) == lda (ZP w)
+prop_sugarBareWord8 :: Word8 -> Bool
+prop_sugarBareWord8 w = asm (lda w) == asm (lda (ZP w))
+
+-- Bare Word16: lda (w :: Word16) == lda (Abs w)
+prop_sugarBareWord16 :: Word16 -> Bool
+prop_sugarBareWord16 w = asm (lda w) == asm (lda (Abs w))
+
+-- A_ singleton: asl A == asl_a (and lsr, rol, ror)
+prop_sugarAccumulatorAsl :: Bool
+prop_sugarAccumulatorAsl = asm (asl A) == asm asl_a
+
+prop_sugarAccumulatorLsr :: Bool
+prop_sugarAccumulatorLsr = asm (lsr A) == asm lsr_a
+
+prop_sugarAccumulatorRol :: Bool
+prop_sugarAccumulatorRol = asm (rol A) == asm rol_a
+
+prop_sugarAccumulatorRor :: Bool
+prop_sugarAccumulatorRor = asm (ror A) == asm ror_a
+
+-- Tuple (Word8, X_): lda (w, X) == lda (ZPX w)
+prop_sugarZPX :: Word8 -> Bool
+prop_sugarZPX w = asm (lda (w, X)) == asm (lda (ZPX w))
+
+-- Tuple (Word8, Y_): ldx (w, Y) == ldx (ZPY w)
+prop_sugarZPY :: Word8 -> Bool
+prop_sugarZPY w = asm (ldx (w, Y)) == asm (ldx (ZPY w))
+
+-- Tuple (Word16, X_): lda (w, X) == lda (AbsX w)
+prop_sugarAbsX :: Word16 -> Bool
+prop_sugarAbsX w = asm (lda (w, X)) == asm (lda (AbsX w))
+
+-- Tuple (Word16, Y_): lda (w, Y) == lda (AbsY w)
+prop_sugarAbsY :: Word16 -> Bool
+prop_sugarAbsY w = asm (lda (w, Y)) == asm (lda (AbsY w))
+
+-- ! with Word8: lda (w ! Y) == lda (IndY w), lda (w ! X) == lda (IndX w)
+prop_sugarIndY :: Word8 -> Bool
+prop_sugarIndY w = asm (lda (w ! Y)) == asm (lda (IndY w))
+
+prop_sugarIndX :: Word8 -> Bool
+prop_sugarIndX w = asm (lda (w ! X)) == asm (lda (IndX w))
+
+-- Var8 operand: allocVar8 + lda v == ZP addressing
+prop_sugarVar8 :: Bool
+prop_sugarVar8 =
+    let cfg = zpConfig [0x10 .. 0x19]
+        (_, bytes) = assemble cfg $ do
+            v <- allocVar8
+            lda v
+    in  bytes == [opcodeFor LDA MZeroPage, 0x10]
+
+-- Ptr ! Y: allocPtr + lda (p ! Y) == indirect,Y
+prop_sugarPtrIndY :: Bool
+prop_sugarPtrIndY =
+    let cfg = zpConfig [0x10 .. 0x19]
+        (_, bytes) = assemble cfg $ do
+            p <- allocPtr
+            lda (p ! Y)
+    in  bytes == [opcodeFor LDA MIndirectY, 0x10]
+
+-- Ptr arithmetic: sta (p + 1) stores to ZP address + 1
+prop_sugarPtrArith :: Bool
+prop_sugarPtrArith =
+    let cfg = zpConfig [0x10 .. 0x19]
+        (_, bytes) = assemble cfg $ do
+            p <- allocPtr
+            sta p
+            sta (p + 1)
+    in  bytes == [ opcodeFor STA MZeroPage, 0x10
+                 , opcodeFor STA MZeroPage, 0x11
+                 ]
+
+-- Var16 helpers: lo16/hi16 produce correct Var8 addresses
+prop_sugarVar16Helpers :: Bool
+prop_sugarVar16Helpers =
+    let cfg = zpConfig [0x20 .. 0x29]
+        (_, bytes) = assemble cfg $ do
+            v <- allocVar16
+            lda (lo16 v)
+            lda (hi16 v)
+    in  bytes == [ opcodeFor LDA MZeroPage, 0x20
+                 , opcodeFor LDA MZeroPage, 0x21
+                 ]
+
+-- Typed allocators: return correct ZP addresses and don't overlap
+prop_sugarAllocators :: Bool
+prop_sugarAllocators =
+    let cfg = zpConfig [0x02 .. 0x0A]
+        ((v8, v16, p), _) = assemble cfg $ do
+            a <- allocVar8   -- 1 byte at 0x02
+            b <- allocVar16  -- 2 bytes at 0x03
+            c <- allocPtr    -- 2 bytes at 0x05
+            pure (a, b, c)
+    in  v8 == Var8 0x02 && v16 == Var16 0x03 && p == Ptr 0x05
+
+-- Var8 tuple indexed: lda (v, X) == lda (ZPX addr)
+prop_sugarVar8X :: Bool
+prop_sugarVar8X =
+    let cfg = zpConfig [0x10 .. 0x19]
+        (_, bytes) = assemble cfg $ do
+            v <- allocVar8
+            lda (v, X)
+    in  bytes == [opcodeFor LDA MZeroPageX, 0x10]
+
+-- Ptr ! X: allocPtr + lda (p ! X) == indirect,X
+prop_sugarPtrIndX :: Bool
+prop_sugarPtrIndX =
+    let cfg = zpConfig [0x10 .. 0x19]
+        (_, bytes) = assemble cfg $ do
+            p <- allocPtr
+            lda (p ! X)
+    in  bytes == [opcodeFor LDA MIndirectX, 0x10]
+
+-- ---------------------------------------------------------------------------
 -- PRG generation (3 props)
 -- ---------------------------------------------------------------------------
 
@@ -444,6 +567,28 @@ main = do
         , checkOnce "multi-byte contiguous"      prop_allocZPMultiByte
         , checkOnce "allocations don't overlap"  prop_allocZPNoOverlap
         , checkOnce "allocZP works inside mdo"   prop_allocZPInMdo
+
+        , section "Addressing mode sugar"
+        , check "# immediate"           prop_sugarImmediate
+        , check "bare Word8 → ZP"       prop_sugarBareWord8
+        , check "bare Word16 → Abs"     prop_sugarBareWord16
+        , checkOnce "asl A == asl_a"    prop_sugarAccumulatorAsl
+        , checkOnce "lsr A == lsr_a"    prop_sugarAccumulatorLsr
+        , checkOnce "rol A == rol_a"    prop_sugarAccumulatorRol
+        , checkOnce "ror A == ror_a"    prop_sugarAccumulatorRor
+        , check "(Word8, X) → ZPX"     prop_sugarZPX
+        , check "(Word8, Y) → ZPY"     prop_sugarZPY
+        , check "(Word16, X) → AbsX"   prop_sugarAbsX
+        , check "(Word16, Y) → AbsY"   prop_sugarAbsY
+        , check "Word8 ! Y → IndY"     prop_sugarIndY
+        , check "Word8 ! X → IndX"     prop_sugarIndX
+        , checkOnce "Var8 → ZP"         prop_sugarVar8
+        , checkOnce "Ptr ! Y → IndY"    prop_sugarPtrIndY
+        , checkOnce "Ptr arithmetic"    prop_sugarPtrArith
+        , checkOnce "Var16 lo16/hi16"   prop_sugarVar16Helpers
+        , checkOnce "typed allocators"  prop_sugarAllocators
+        , checkOnce "Var8 tuple (v,X)"  prop_sugarVar8X
+        , checkOnce "Ptr ! X → IndX"    prop_sugarPtrIndX
 
         , section "PRG generation"
         , check "prg length = input + 2"   prop_prgLength

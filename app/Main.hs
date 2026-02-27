@@ -2,11 +2,11 @@
 
 module Main where
 
-import Data.Word (Word8)
+import Data.Word (Word8, Word16)
 import Numeric (showHex)
 import qualified Data.ByteString as BS
 
-import Asm.Monad (TargetConfig(..), assemble, allocZP, label)
+import Asm.Monad (TargetConfig(..), assemble, label)
 import Asm.Mos6502
 import Target.C64 (c64TargetConfig, defaultC64Subsystems, C64Subsystems(..))
 import Target.C64.PRG (toPRG)
@@ -20,11 +20,11 @@ main = do
     let (_, bytes1) = assemble cfg $ do
             sei
             cld
-            ldx (Imm 0xFF)
+            ldx # 0xFF
             txs
-            lda (Imm 0x00)
-            sta (Abs 0xD020)
-            sta (Abs 0xD021)
+            lda # 0x00
+            sta (0xD020 :: Word16)
+            sta (0xD021 :: Word16)
             loop <- label
             jmp loop
 
@@ -36,9 +36,9 @@ main = do
     -- Test 2: Forward branch via mdo
     -- LDA $10; BEQ skip; LDA #$FF; skip: RTS
     let (_, bytes2) = assemble cfg $ mdo
-            lda (ZP 0x10)
+            lda (0x10 :: Word8)
             beq skip
-            lda (Imm 0xFF)
+            lda # 0xFF
             skip <- label
             rts
     putStrLn "Test 2 — forward branch (mdo):"
@@ -59,14 +59,14 @@ main = do
 
     -- Test 4: LDA with all 8 addressing modes
     let (_, bytes4) = assemble cfg $ do
-            lda (Imm  0x42)
-            lda (ZP   0x80)
-            lda (ZPX  0x80)
-            lda (Abs  0x1234)
-            lda (AbsX 0x1234)
-            lda (AbsY 0x1234)
-            lda (IndX 0x80)
-            lda (IndY 0x80)
+            lda # 0x42
+            lda (0x80 :: Word8)
+            lda (0x80 :: Word8, X)
+            lda (0x1234 :: Word16)
+            lda (0x1234 :: Word16, X)
+            lda (0x1234 :: Word16, Y)
+            lda ((0x80 :: Word8) ! X)
+            lda ((0x80 :: Word8) ! Y)
     putStrLn "Test 4 — LDA all 8 addressing modes:"
     putStrLn $ "  " ++ hexDump bytes4
     putStrLn $ "  expected: A9 42 A5 80 B5 80 AD 34 12 BD 34 12 B9 34 12 A1 80 B1 80"
@@ -76,14 +76,14 @@ main = do
     let zpCfg = c64TargetConfig 0x0800 defaultC64Subsystems
                     { useBasic = False }
     let (_, bytes5) = assemble zpCfg $ mdo
-            -- Allocate 2 ZP bytes for a pointer
-            ptr <- allocZP 2
+            -- Allocate a pointer (2 ZP bytes)
+            ptr <- allocPtr
             -- Use the allocated ZP address
-            lda (Imm 0x00)
-            sta (ZP ptr)
-            sta (ZP (ptr + 1))
+            lda # 0x00
+            sta ptr
+            sta (ptr + 1)
             -- Load through the pointer
-            lda (IndY ptr)
+            lda (ptr ! Y)
             rts
     putStrLn "Test 5 — zero-page allocation (C64, BASIC off):"
     putStrLn $ "  " ++ hexDump bytes5

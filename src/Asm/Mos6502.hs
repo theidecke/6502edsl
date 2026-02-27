@@ -1,3 +1,5 @@
+{-# LANGUAGE FunctionalDependencies #-}
+
 module Asm.Mos6502
     ( -- * Operand newtypes
       Imm(..), ZP(..), ZPX(..), ZPY(..)
@@ -10,6 +12,15 @@ module Asm.Mos6502
       -- * Opcode table lookup
     , opcodeTable
     , opcodeFor
+      -- * Singleton types
+    , X_(..), Y_(..), A_(..)
+      -- * Variable types
+    , Var8(..), Var16(..), Ptr(..)
+    , lo16, hi16
+      -- * Addressing mode sugar
+    , (#), Indirectable(..)
+      -- * Typed allocation
+    , allocVar8, allocVar16, allocPtr
       -- * Operand instructions
     , lda, ldx, ldy, sta, stx, sty
     , adc, sbc, and_, ora, eor
@@ -28,13 +39,13 @@ module Asm.Mos6502
       -- * Branch instructions
     , bcc, bcs, beq, bmi, bne, bpl, bvc, bvs
       -- * Jump instructions
-    , jmp, jmp_ind, jsr
+    , jmp, jmp_ind, jmpInd, jsr
     ) where
 
 import Data.Map.Strict qualified as Map
 import Data.Word (Word8, Word16)
 
-import Asm.Monad (ASM, emit, label, lo, hi)
+import Asm.Monad (ASM, emit, label, lo, hi, allocZP)
 import ISA.Mos6502 (Opcode(..))
 
 -- ---------------------------------------------------------------------------
@@ -82,6 +93,99 @@ instance Operand AbsY where operandMode _ = MAbsoluteY;  operandBytes (AbsY w) =
 instance Operand Ind  where operandMode _ = MIndirect;   operandBytes (Ind  w) = [lo w, hi w]
 instance Operand IndX where operandMode _ = MIndirectX;  operandBytes (IndX b) = [b]
 instance Operand IndY where operandMode _ = MIndirectY;  operandBytes (IndY b) = [b]
+
+-- ---------------------------------------------------------------------------
+-- Singleton types for register indices
+-- ---------------------------------------------------------------------------
+
+data X_ = X
+data Y_ = Y
+data A_ = A
+
+-- ---------------------------------------------------------------------------
+-- Typed variable newtypes
+-- ---------------------------------------------------------------------------
+
+newtype Var8  = Var8  Word8  deriving (Show, Eq)
+newtype Var16 = Var16 Word8  deriving (Show, Eq)
+data    Ptr   = Ptr   Word8  deriving (Show, Eq)
+
+instance Num Var8 where
+    Var8 a + Var8 b = Var8 (a + b)
+    fromInteger = Var8 . fromInteger
+    Var8 a * Var8 b = Var8 (a * b)
+    abs    = id
+    signum (Var8 a) = Var8 (signum a)
+    negate (Var8 a) = Var8 (negate a)
+
+instance Num Ptr where
+    Ptr a + Ptr b = Ptr (a + b)
+    fromInteger = Ptr . fromInteger
+    Ptr a * Ptr b = Ptr (a * b)
+    abs    = id
+    signum (Ptr a) = Ptr (signum a)
+    negate (Ptr a) = Ptr (negate a)
+
+lo16 :: Var16 -> Var8
+lo16 (Var16 a) = Var8 a
+
+hi16 :: Var16 -> Var8
+hi16 (Var16 a) = Var8 (a + 1)
+
+-- ---------------------------------------------------------------------------
+-- Operand instances for bare types and tuples
+-- ---------------------------------------------------------------------------
+
+instance Operand Word8  where operandMode _ = MZeroPage;    operandBytes w = [w]
+instance Operand Word16 where operandMode _ = MAbsolute;    operandBytes w = [lo w, hi w]
+instance Operand A_     where operandMode _ = MAccumulator; operandBytes _ = []
+instance Operand Var8   where operandMode _ = MZeroPage;    operandBytes (Var8 a) = [a]
+instance Operand Ptr    where operandMode _ = MZeroPage;    operandBytes (Ptr a) = [a]
+
+instance Operand (Word8,  X_) where operandMode _ = MZeroPageX;  operandBytes (w, _) = [w]
+instance Operand (Word8,  Y_) where operandMode _ = MZeroPageY;  operandBytes (w, _) = [w]
+instance Operand (Word16, X_) where operandMode _ = MAbsoluteX;  operandBytes (w, _) = [lo w, hi w]
+instance Operand (Word16, Y_) where operandMode _ = MAbsoluteY;  operandBytes (w, _) = [lo w, hi w]
+instance Operand (Var8,   X_) where operandMode _ = MZeroPageX;  operandBytes (Var8 a, _) = [a]
+instance Operand (Var8,   Y_) where operandMode _ = MZeroPageY;  operandBytes (Var8 a, _) = [a]
+instance Operand (Ptr,    X_) where operandMode _ = MZeroPageX;  operandBytes (Ptr a, _) = [a]
+instance Operand (Ptr,    Y_) where operandMode _ = MZeroPageY;  operandBytes (Ptr a, _) = [a]
+
+-- ---------------------------------------------------------------------------
+-- (#) operator — immediate mode sugar
+-- ---------------------------------------------------------------------------
+
+infixl 8 #
+
+(#) :: (Imm -> ASM ()) -> Word8 -> ASM ()
+f # v = f (Imm v)
+
+-- ---------------------------------------------------------------------------
+-- (!) operator — indirect mode sugar
+-- ---------------------------------------------------------------------------
+
+infixl 8 !
+
+class Indirectable a ix result | a ix -> result where
+    (!) :: a -> ix -> result
+
+instance Indirectable Word8 Y_ IndY where (!) a Y = IndY a
+instance Indirectable Word8 X_ IndX where (!) a X = IndX a
+instance Indirectable Ptr   Y_ IndY where (!) (Ptr a) Y = IndY a
+instance Indirectable Ptr   X_ IndX where (!) (Ptr a) X = IndX a
+
+-- ---------------------------------------------------------------------------
+-- Typed allocation
+-- ---------------------------------------------------------------------------
+
+allocVar8 :: ASM Var8
+allocVar8 = Var8 <$> allocZP 1
+
+allocVar16 :: ASM Var16
+allocVar16 = Var16 <$> allocZP 2
+
+allocPtr :: ASM Ptr
+allocPtr = Ptr <$> allocZP 2
 
 -- ---------------------------------------------------------------------------
 -- Opcode table
@@ -359,6 +463,9 @@ jmp addr = emit [opcodeFor JMP MAbsolute, lo addr, hi addr]
 
 jmp_ind :: Word16 -> ASM ()
 jmp_ind addr = emit [opcodeFor JMP MIndirect, lo addr, hi addr]
+
+jmpInd :: Word16 -> ASM ()
+jmpInd = jmp_ind
 
 jsr :: Word16 -> ASM ()
 jsr addr = emit [opcodeFor JSR MAbsolute, lo addr, hi addr]
