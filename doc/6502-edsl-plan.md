@@ -30,7 +30,7 @@ Required instances: `Functor`, `Applicative`, `Monad`, `MonadFix`.
 emit :: [Word8] -> ASM ()
 -- Appends bytes to output, advances offset by length of bytes.
 
-here :: ASM Word16
+label :: ASM Word16
 -- Returns current offset without emitting anything. This is how labels work.
 
 runASM :: Word16 -> ASM () -> [Word8]
@@ -52,10 +52,10 @@ This allows forward references:
 mdo beq skip
     lda # 0xFF
     sta playerX
-    skip <- here
+    skip <- label
 ```
 
-The value `skip` is a thunk that gets resolved when execution reaches `here`. This works because instruction *sizes* are always known eagerly (BEQ is always 2 bytes, JMP is always 3), and only the operand *values* are lazy.
+The value `skip` is a thunk that gets resolved when execution reaches `label`. This works because instruction *sizes* are always known eagerly (BEQ is always 2 bytes, JMP is always 3), and only the operand *values* are lazy.
 
 ### Branch instruction helpers
 
@@ -367,7 +367,7 @@ incbin path = do
 -- Computed lookup tables (a major strength of the EDSL)
 --
 -- Example: 256-entry sine table
--- sineTable <- here
+-- sineTable <- label
 -- byte [round (128 + 127 * sin (2 * pi * i / 256)) | i <- [0..255]]
 ```
 
@@ -376,7 +376,7 @@ incbin path = do
 ```haskell
 align :: Int -> ASM ()
 align n = do
-  pos <- here
+  pos <- label
   let padding = (n - fromIntegral pos `mod` n) `mod` n
   emit (replicate padding 0x00)
 ```
@@ -435,9 +435,9 @@ if_eq thenBlock elseBlock = mdo
   bne elseStart
   thenBlock
   jmp end
-  elseStart <- here
+  elseStart <- label
   elseBlock
-  end <- here
+  end <- label
   pure ()
 
 if_ :: (Word16 -> ASM ()) -> ASM () -> ASM () -> ASM ()
@@ -446,19 +446,19 @@ if_ :: (Word16 -> ASM ()) -> ASM () -> ASM () -> ASM ()
 
 while_ :: ASM () -> ASM () -> ASM ()
 while_ cond body = mdo
-  top <- here
+  top <- label
   cond
   beq exit
   body
   jmp top
-  exit <- here
+  exit <- label
   pure ()
 
 for_x :: Word8 -> ASM () -> ASM ()
 -- Idiomatic 6502 loop: LDX #n, body, DEX, BNE loop
 for_x count body = mdo
   ldx # count
-  loop <- here
+  loop <- label
   body
   dex
   bne loop
@@ -578,7 +578,7 @@ main = do
 
         basicStub entry
 
-        entry <- here
+        entry <- label
 
         -- clear screen with spaces
         lda # 0x20
@@ -596,18 +596,18 @@ main = do
 
         -- print message
         ldy # 0x00
-        printLoop <- here
+        printLoop <- label
         lda (src ! Y)
         beq done
         sta (0x0400, Y)
         iny
         bne printLoop
 
-        done <- here
+        done <- label
         rts
 
         -- data
-        messageAddr <- here
+        messageAddr <- label
         petscii "HELLO FROM HASKELL"
         byte [0x00]
 
@@ -623,7 +623,7 @@ main = do
 ## Implementation Order
 
 1. **ASM monad with MonadFix** — the foundation everything else builds on
-2. **emit, here, branch, jmp** — minimal instruction emission
+2. **emit, label, branch, jmp** — minimal instruction emission
 3. **Opcode functions with AutoAddr typeclass** — all 56 instructions, all addressing modes
 4. **The `#` operator, tuple instances, `!` operator** — the syntactic sugar layer
 5. **Typed variables (Var8, Var16, Ptr) and ZP allocator** — named variables
