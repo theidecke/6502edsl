@@ -12,9 +12,15 @@ import System.Exit (exitFailure)
 import Test.QuickCheck hiding ((.&.), label)
 import Test.QuickCheck.Random (mkQCGen)
 
+import Data.Char (ord)
+
 import Asm.Monad (ASM, TargetConfig(..), assemble, emit, label, allocZP, lo, hi)
 import Asm.Mos6502
+import Asm.Mos6502.Memory (align, alignPage)
+import Asm.Mos6502.Control (if_, if_eq, if_ne, if_cs, if_cc, if_pl, if_mi, while_, for_x, for_y, loop_)
+import Asm.Mos6502.Ops16 (add16, sub16, inc16, dec16, cmp16, mov16, load16)
 import ISA.Mos6502 (Opcode(..))
+import Target.C64.Data (byte, word, petscii, pstring, charToPetscii)
 import Target.C64.PRG (toPRG)
 import Target.C64.D64 (toD64)
 
@@ -510,6 +516,219 @@ prop_d64RoundTrip payload =
                 else take 254 (drop (off + 2) img) ++ followChain img (nextT, nextS)
 
 -- ---------------------------------------------------------------------------
+-- Asm.Mos6502.Memory (6 props)
+-- ---------------------------------------------------------------------------
+
+prop_alignAlreadyAligned :: Bool
+prop_alignAlreadyAligned = asmAt 0x0100 (align 256) == []
+
+prop_alignPadding :: Bool
+prop_alignPadding = asmAt 0x0001 (align 4) == [0x00, 0x00, 0x00]
+
+prop_alignOne :: Bool
+prop_alignOne = asmAt 0x0003 (align 1) == []
+
+prop_alignZero :: Bool
+prop_alignZero = asmAt 0x0003 (align 0) == []
+
+prop_alignAfterCode :: Bool
+prop_alignAfterCode =
+    -- nop at 0xF0 → PC=0xF1, 0xF1 mod 8 = 1, padding = 7
+    asmAt 0x00F0 (nop >> align 8) == [0xEA] ++ replicate 7 0x00
+
+prop_alignPage :: Bool
+prop_alignPage =
+    -- nop at 0xF0 → PC=0xF1, 0xF1 mod 256 = 241, padding = 15
+    let bytes = asmAt 0x00F0 (nop >> alignPage)
+    in  bytes == 0xEA : replicate 15 0x00
+
+-- ---------------------------------------------------------------------------
+-- Target.C64.Data (12 props)
+-- ---------------------------------------------------------------------------
+
+prop_byteIdentity :: [Word8] -> Property
+prop_byteIdentity bs = length bs < 256 ==> asm (byte bs) == bs
+
+prop_wordLE :: Word16 -> Bool
+prop_wordLE w = asm (word [w]) == [lo w, hi w]
+
+prop_wordMultiple :: Bool
+prop_wordMultiple = asm (word [0x1234, 0x5678]) == [0x34, 0x12, 0x78, 0x56]
+
+prop_wordEmpty :: Bool
+prop_wordEmpty = asm (word []) == []
+
+prop_petsciiUppercase :: Bool
+prop_petsciiUppercase = asm (petscii "HELLO") == [0x48, 0x45, 0x4C, 0x4C, 0x4F]
+
+prop_petsciiLowercase :: Bool
+prop_petsciiLowercase = asm (petscii "ab") == [0xC1, 0xC2]
+
+prop_petsciiDigits :: Bool
+prop_petsciiDigits = asm (petscii "09") == [0x30, 0x39]
+
+prop_petsciiSpace :: Bool
+prop_petsciiSpace = asm (petscii " ") == [0x20]
+
+prop_pstringNullTerminated :: Bool
+prop_pstringNullTerminated = asm (pstring "HI") == [0x48, 0x49, 0x00]
+
+prop_charToPetsciiUpperRange :: Bool
+prop_charToPetsciiUpperRange =
+    all (\c -> charToPetscii c == fromIntegral (ord c)) ['A'..'Z']
+
+prop_charToPetsciiLowerRange :: Bool
+prop_charToPetsciiLowerRange =
+    all (\c -> charToPetscii c == fromIntegral (ord c - ord 'a' + 0xC1)) ['a'..'z']
+
+prop_charToPetsciiPunctuation :: Bool
+prop_charToPetsciiPunctuation =
+    charToPetscii '@' == 0x40
+    && charToPetscii '[' == 0x5B
+    && charToPetscii '!' == 0x21
+
+-- ---------------------------------------------------------------------------
+-- Asm.Mos6502.Control (12 props)
+-- ---------------------------------------------------------------------------
+
+-- Helper: emit if_ variant with nop/nop then/else blocks
+ifBytes :: (ASM () -> ASM () -> ASM ()) -> [Word8]
+ifBytes f = asm (f nop nop)
+
+-- if_eq uses BNE ($D0) to skip then-block
+prop_ifEqUsesBne :: Bool
+prop_ifEqUsesBne = ifBytes if_eq == [0xD0, 0x04, 0xEA, 0x4C, 0x07, 0x00, 0xEA]
+
+-- if_ne uses BEQ ($F0)
+prop_ifNeUsesBeq :: Bool
+prop_ifNeUsesBeq = ifBytes if_ne == [0xF0, 0x04, 0xEA, 0x4C, 0x07, 0x00, 0xEA]
+
+-- if_cs uses BCC ($90)
+prop_ifCsUsesBcc :: Bool
+prop_ifCsUsesBcc = ifBytes if_cs == [0x90, 0x04, 0xEA, 0x4C, 0x07, 0x00, 0xEA]
+
+-- if_cc uses BCS ($B0)
+prop_ifCcUsesBcs :: Bool
+prop_ifCcUsesBcs = ifBytes if_cc == [0xB0, 0x04, 0xEA, 0x4C, 0x07, 0x00, 0xEA]
+
+-- if_pl uses BMI ($30)
+prop_ifPlUsesBmi :: Bool
+prop_ifPlUsesBmi = ifBytes if_pl == [0x30, 0x04, 0xEA, 0x4C, 0x07, 0x00, 0xEA]
+
+-- if_mi uses BPL ($10)
+prop_ifMiUsesBpl :: Bool
+prop_ifMiUsesBpl = ifBytes if_mi == [0x10, 0x04, 0xEA, 0x4C, 0x07, 0x00, 0xEA]
+
+-- Larger then-block shifts offsets correctly
+prop_ifLargerThenBlock :: Bool
+prop_ifLargerThenBlock =
+    -- then = 3 nops → BNE offset=6, JMP to $0009
+    asm (if_eq (nop >> nop >> nop) nop)
+    == [0xD0, 0x06, 0xEA, 0xEA, 0xEA, 0x4C, 0x09, 0x00, 0xEA]
+
+-- Generalized if_ with custom branch
+prop_ifGeneralized :: Bool
+prop_ifGeneralized =
+    -- if_ bvc = "if overflow clear, then; else"
+    asm (if_ bvc nop nop) == [0x50, 0x04, 0xEA, 0x4C, 0x07, 0x00, 0xEA]
+
+-- for_x: LDX #count, body, DEX, BNE back
+prop_forXBytes :: Bool
+prop_forXBytes = asm (for_x 3 nop) == [0xA2, 0x03, 0xEA, 0xCA, 0xD0, 0xFC]
+
+-- for_y: LDY #count, body, DEY, BNE back
+prop_forYBytes :: Bool
+prop_forYBytes = asm (for_y 5 nop) == [0xA0, 0x05, 0xEA, 0x88, 0xD0, 0xFC]
+
+-- for_x with larger body adjusts branch offset
+prop_forXMultiByteBody :: Bool
+prop_forXMultiByteBody =
+    -- body = 3 nops → BNE offset = 2-(3+3+1+2) = -6 = 0xFA
+    asm (for_x 2 (nop >> nop >> nop)) == [0xA2, 0x02, 0xEA, 0xEA, 0xEA, 0xCA, 0xD0, 0xFA]
+
+-- loop_: body, JMP back
+prop_loopBytes :: Bool
+prop_loopBytes = asm (loop_ nop) == [0xEA, 0x4C, 0x00, 0x00]
+
+-- while_: cond, exitBranch, body, JMP back
+prop_whileBytes :: Bool
+prop_whileBytes =
+    -- while_ beq (cmp #5) nop → loop while Z=0
+    -- top@0: C9 05, beq exit@2: F0 04, nop@4: EA, jmp top@5: 4C 00 00, exit@8
+    asm (while_ beq (cmp # 0x05) nop)
+    == [0xC9, 0x05, 0xF0, 0x04, 0xEA, 0x4C, 0x00, 0x00]
+
+-- ---------------------------------------------------------------------------
+-- Asm.Mos6502.Ops16 (7 props)
+-- ---------------------------------------------------------------------------
+
+-- Helper: assemble with ZP vars available (0x02..0x0F)
+asmZP :: ASM a -> [Word8]
+asmZP = snd . assemble (zpConfig [0x02..0x0F])
+
+-- load16 v imm → LDA #lo, STA lo16, LDA #hi, STA hi16
+prop_load16Bytes :: Bool
+prop_load16Bytes =
+    asmZP (allocVar16 >>= \v -> load16 v 0x1234)
+    == [0xA9, 0x34, 0x85, 0x02, 0xA9, 0x12, 0x85, 0x03]
+
+-- inc16 v → INC lo, BNE +2, INC hi
+prop_inc16Bytes :: Bool
+prop_inc16Bytes =
+    asmZP (allocVar16 >>= inc16)
+    == [0xE6, 0x02, 0xD0, 0x02, 0xE6, 0x03]
+
+-- dec16 v → LDA lo, BNE +2, DEC hi, DEC lo
+prop_dec16Bytes :: Bool
+prop_dec16Bytes =
+    asmZP (allocVar16 >>= dec16)
+    == [0xA5, 0x02, 0xD0, 0x02, 0xC6, 0x03, 0xC6, 0x02]
+
+-- add16 dst a b → CLC, LDA lo(a), ADC lo(b), STA lo(dst), ...
+prop_add16Bytes :: Bool
+prop_add16Bytes =
+    let bytes = asmZP $ do
+            dst <- allocVar16  -- 0x02,0x03
+            a   <- allocVar16  -- 0x04,0x05
+            b   <- allocVar16  -- 0x06,0x07
+            add16 dst a b
+    in  bytes == [ 0x18                                -- CLC
+                 , 0xA5, 0x04, 0x65, 0x06, 0x85, 0x02 -- lo: LDA, ADC, STA
+                 , 0xA5, 0x05, 0x65, 0x07, 0x85, 0x03 -- hi: LDA, ADC, STA
+                 ]
+
+-- sub16 dst a b → SEC, LDA lo(a), SBC lo(b), STA lo(dst), ...
+prop_sub16Bytes :: Bool
+prop_sub16Bytes =
+    let bytes = asmZP $ do
+            dst <- allocVar16  -- 0x02,0x03
+            a   <- allocVar16  -- 0x04,0x05
+            b   <- allocVar16  -- 0x06,0x07
+            sub16 dst a b
+    in  bytes == [ 0x38                                -- SEC
+                 , 0xA5, 0x04, 0xE5, 0x06, 0x85, 0x02 -- lo: LDA, SBC, STA
+                 , 0xA5, 0x05, 0xE5, 0x07, 0x85, 0x03 -- hi: LDA, SBC, STA
+                 ]
+
+-- mov16 dst src → LDA lo(src), STA lo(dst), LDA hi(src), STA hi(dst)
+prop_mov16Bytes :: Bool
+prop_mov16Bytes =
+    let bytes = asmZP $ do
+            dst <- allocVar16  -- 0x02,0x03
+            src <- allocVar16  -- 0x04,0x05
+            mov16 dst src
+    in  bytes == [0xA5, 0x04, 0x85, 0x02, 0xA5, 0x05, 0x85, 0x03]
+
+-- cmp16 a b → LDA lo(a), CMP lo(b), LDA hi(a), SBC hi(b)
+prop_cmp16Bytes :: Bool
+prop_cmp16Bytes =
+    let bytes = asmZP $ do
+            a <- allocVar16  -- 0x02,0x03
+            b <- allocVar16  -- 0x04,0x05
+            cmp16 a b
+    in  bytes == [0xA5, 0x02, 0xC5, 0x04, 0xA5, 0x03, 0xE5, 0x05]
+
+-- ---------------------------------------------------------------------------
 -- Test runner
 -- ---------------------------------------------------------------------------
 
@@ -600,6 +819,52 @@ main = do
         , checkOnce "d64 BAM header bytes"     prop_d64BamHeader
         , checkOnce "d64 directory file type"  prop_d64DirectoryFileType
         , check "d64 round-trip T/S chain" prop_d64RoundTrip
+
+        , section "Memory alignment"
+        , checkOnce "align already aligned"     prop_alignAlreadyAligned
+        , checkOnce "align adds padding"        prop_alignPadding
+        , checkOnce "align 1 is no-op"          prop_alignOne
+        , checkOnce "align 0 is no-op"          prop_alignZero
+        , checkOnce "align after code"          prop_alignAfterCode
+        , checkOnce "alignPage to 256"          prop_alignPage
+
+        , section "Data embedding"
+        , check "byte identity"                 prop_byteIdentity
+        , check "word little-endian"            prop_wordLE
+        , checkOnce "word multiple values"      prop_wordMultiple
+        , checkOnce "word empty list"           prop_wordEmpty
+        , checkOnce "petscii uppercase"         prop_petsciiUppercase
+        , checkOnce "petscii lowercase"         prop_petsciiLowercase
+        , checkOnce "petscii digits"            prop_petsciiDigits
+        , checkOnce "petscii space"             prop_petsciiSpace
+        , checkOnce "pstring null-terminated"   prop_pstringNullTerminated
+        , checkOnce "charToPetscii A-Z"         prop_charToPetsciiUpperRange
+        , checkOnce "charToPetscii a-z"         prop_charToPetsciiLowerRange
+        , checkOnce "charToPetscii punctuation" prop_charToPetsciiPunctuation
+
+        , section "Control flow"
+        , checkOnce "if_eq uses BNE"            prop_ifEqUsesBne
+        , checkOnce "if_ne uses BEQ"            prop_ifNeUsesBeq
+        , checkOnce "if_cs uses BCC"            prop_ifCsUsesBcc
+        , checkOnce "if_cc uses BCS"            prop_ifCcUsesBcs
+        , checkOnce "if_pl uses BMI"            prop_ifPlUsesBmi
+        , checkOnce "if_mi uses BPL"            prop_ifMiUsesBpl
+        , checkOnce "if_ larger then block"     prop_ifLargerThenBlock
+        , checkOnce "if_ generalized (bvc)"     prop_ifGeneralized
+        , checkOnce "for_x bytes"               prop_forXBytes
+        , checkOnce "for_y bytes"               prop_forYBytes
+        , checkOnce "for_x multi-byte body"     prop_forXMultiByteBody
+        , checkOnce "loop_ bytes"               prop_loopBytes
+        , checkOnce "while_ bytes"              prop_whileBytes
+
+        , section "16-bit operations"
+        , checkOnce "load16 bytes"              prop_load16Bytes
+        , checkOnce "inc16 bytes"               prop_inc16Bytes
+        , checkOnce "dec16 bytes"               prop_dec16Bytes
+        , checkOnce "add16 bytes"               prop_add16Bytes
+        , checkOnce "sub16 bytes"               prop_sub16Bytes
+        , checkOnce "mov16 bytes"               prop_mov16Bytes
+        , checkOnce "cmp16 bytes"               prop_cmp16Bytes
         ]
     if ok then putStrLn "\nAll properties passed."
           else putStrLn "\nSome properties FAILED." >> exitFailure
