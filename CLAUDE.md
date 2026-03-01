@@ -11,7 +11,7 @@ Haskell embedded DSL for writing 6502 assembly code, targeting the Commodore 64.
 ```bash
 cabal build            # Build the project (library + executable)
 cabal run main         # Run the executable (writes hello.d64 + hello.vs)
-cabal test             # Run the QuickCheck test suite (~116 properties)
+cabal test             # Run the QuickCheck test suite (~190 properties + Dormann)
 cabal repl             # Interactive GHC REPL (library modules)
 cabal repl exe:main      # REPL with executable + library
 cabal clean            # Clean build artifacts
@@ -22,7 +22,7 @@ cabal clean            # Clean build artifacts
 - **Build system**: Cabal (spec 3.0), GHC2024 language edition, GHC 9.10.1
 - **Version**: 0.2.0.0
 - **Source layout**: Library in `src/`, executable in `app/`, tests in `test/`
-- **Dependencies**: `base`, `array`, `containers` (library); adds `bytestring` (exe), `QuickCheck` (test)
+- **Dependencies**: `base`, `array`, `containers` (library); adds `bytestring` (exe), `QuickCheck` + `bytestring` (test)
 - **Compiler warnings**: `-Wall` enabled; project builds with zero warnings
 
 ### Module Structure
@@ -50,7 +50,7 @@ src/
       D64.hs                   -- .d64 disk image generation (BAM, directory, sector chains)
       Data.hs                  -- Data embedding (byte, word, petscii, pstring)
       Debug.hs                 -- VICE monitor symbol file export
-      Mem.hs                   -- Re-exports all Mem.* submodules
+      Mem.hs                   -- Re-exports all Mem.* submodules (VIC, SID, CIA, KERNAL, System)
       Mem/
         VIC.hs                 -- VIC-II registers ($D000-$D02E)
         SID.hs                 -- SID registers ($D400-$D41C)
@@ -58,9 +58,19 @@ src/
         CIA2.hs                -- CIA 2 registers ($DD00-$DD0F)
         Kernal.hs              -- KERNAL jump table + hardware vectors
         System.hs              -- CPU port, system vectors, screen/color RAM, color constants
+  Emu/
+    Mem.hs                     -- RAM: newtype Mem (IntMap Word8), readByte/writeByte/loadBytes
+    CPU.hs                     -- CPUState, hand-rolled van Laarhoven lenses, flag bit lenses,
+                               --   memAt composite lens, updateNZ
+    Step.hs                    -- execute (Instruction → CPUState → CPUState),
+                               --   step (fetch-decode-execute), all 151 instructions,
+                               --   BCD decimal mode, JMP indirect page bug, cycle counting
+    Trace.hs                   -- trace (lazy infinite [CPUState]), runUntil, runN, loadProgram
 app/Main.hs                    -- Example program: fills C64 screen with colored blocks
 test/
   Main.hs                      -- Test runner (imports all test modules)
+  data/
+    6502_functional_test.bin   -- Klaus Dormann's 6502 functional test (65536 bytes)
   Test/
     Helpers.hs                 -- Shared test infrastructure (runner, TestInsn, Arbitrary instances)
     ISA.hs                     -- ISA tests: lo/hi, table integrity, encode/decode, sizes, cycles
@@ -69,11 +79,20 @@ test/
     Control.hs                 -- Structured control flow + 16-bit operations
     Memory.hs                  -- Alignment, samePage, fitsIn, annotate, assembleWithLabels
     Target.hs                  -- PRG, D64, data embedding, VICE label export
+    Emu/
+      Mem.hs                   -- Mem properties: read/write identity, isolation, persistence
+      CPU.hs                   -- Lens laws, flag bit positions, updateNZ, memAt
+      Step.hs                  -- All instruction categories: load/store, transfer, stack,
+                               --   ADC/SBC binary+decimal, logic, compare, shift/rotate,
+                               --   inc/dec, branches, jumps, flags, BIT, BRK, NOP, cycles
+      Trace.hs                 -- Trace/runN/loadProgram properties
+      Integration.hs           -- Assembler→emulator bridge (assemble then execute)
+      Dormann.hs               -- Klaus Dormann functional test (~96M cycles to success)
 ```
 
 ### Key Design Decisions
 
-- **ISA as single source of truth**: `ISA.Mos6502` owns all encoding/decoding knowledge. Both the assembler and (future) emulator depend on it, but not on each other. The `encode` function is a direct 151-arm pattern match; `decode` uses an O(1) `Array Word8` lookup table.
+- **ISA as single source of truth**: `ISA.Mos6502` owns all encoding/decoding knowledge. Both the assembler and emulator depend on it, but not on each other. The `encode` function is a direct 151-arm pattern match; `decode` uses an O(1) `Array Word8` lookup table. Also exports `lo`, `hi`, `w16` used by both.
 - **Single-pass assembly via MonadFix**: Forward label references use `mdo`/`RecursiveDo`. Works because instruction sizes are determined eagerly (via `instrSize` on `AddressingMode` constructors); only operand values are lazy.
 - **Addressing modes via typeclasses**: `Operand` typeclass with a single method `toAddrMode :: a -> AddressingMode`. Instances for newtypes (`Imm`, `ZP`, `Abs`, etc.), bare types (`Word8` = ZP, `Word16` = Abs), tuples (`(addr, X)`), and singletons (`A`).
 - **`(#)` operator**: Immediate mode sugar (`lda # 0x42`).
@@ -81,6 +100,9 @@ test/
 - **Typed ZP variables**: `Var8`, `Var16`, `Ptr` allocated from a `Set Word8` free pool.
 - **Assembly-time errors**: `error` calls for invalid addressing modes, out-of-ZP, branch range issues, `fitsIn`/`samePage` violations.
 - **Output formats**: `[Word8]` lists throughout; `toPRG` adds load address header; `toD64` builds complete disk image.
+- **Emulator lenses**: Hand-rolled van Laarhoven `Lens'` using only `Const`/`Identity` from `base` (~50 lines). Type-compatible with `microlens`/`lens` for future migration. Flag lenses address individual bits of the P register.
+- **Emulator memory**: `IntMap.Strict` from `containers` (already a dependency). Uninitialized reads return 0x00. Correctness first; nibble trie is a drop-in optimization later.
+- **Emulator validation**: Klaus Dormann's 6502 functional test exercises all 151 instructions including decimal mode. Success address `$3469` after ~96M cycles.
 
 ## Conventions
 
@@ -89,7 +111,8 @@ test/
 - Accumulator-mode shift/rotate: `asl_a` / `asl A` (both work)
 - Memory map constants: `vic*`, `sid*`, `cia1*`/`cia2*`, `kernal*`, `sys*`, `color*` prefixes
 - Tests use deterministic QuickCheck (seed 42, 1000 cases for parametric props)
-- Tests are split into focused modules under `test/Test/`, each exporting a `tests :: [IO Bool]` list
+- Tests are split into focused modules under `test/Test/` and `test/Test/Emu/`, each exporting a `tests :: [IO Bool]` list
+- The Dormann test uses `checkIO` for IO-based validation (loads `.bin` file from `test/data/`)
 
 
 ## General development principles

@@ -7,6 +7,7 @@ module ISA.Mos6502
     , instrSize
     , baseCycles
     , canPageCross
+    , lo, hi, w16
     ) where
 
 import Data.Array (Array, listArray, (!))

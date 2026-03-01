@@ -2,7 +2,7 @@
 
 A Haskell EDSL for writing 6502 assembly, with first-class support for Commodore 64 targets. Programs are assembled at Haskell runtime and can be exported as `.prg` files or complete `.d64` disk images.
 
-The ISA module (`ISA.Mos6502`) is the single source of truth for the 6502 instruction set — encoding, decoding, sizes, and cycle costs — shared between the assembler and (future) emulator.
+The ISA module (`ISA.Mos6502`) is the single source of truth for the 6502 instruction set — encoding, decoding, sizes, and cycle costs — shared between the assembler and the emulator.
 
 ## Setup
 
@@ -364,6 +364,12 @@ let d64 = toD64 "DISKNAME" prg
 BS.writeFile "output.d64" (BS.pack d64)
 ```
 
+## Emulator
+
+The project includes a cycle-accurate NMOS 6502 emulator (`Emu.*` modules) that shares the ISA module with the assembler. It implements all 151 official instructions including decimal mode (BCD) arithmetic with correct NMOS flag behavior, the JMP indirect page boundary bug, and proper BRK/RTI semantics.
+
+The emulator is validated against the [Klaus Dormann 6502 functional test suite](https://github.com/Klaus2m5/6502_65C02_functional_tests), which exhaustively tests all instructions, addressing modes, and flag behavior including decimal mode. The test runs ~96 million cycles to completion.
+
 ## Project Structure
 
 ```
@@ -377,6 +383,11 @@ src/
       Ops16.hs                 -- 16-bit arithmetic (add16, inc16, cmp16, etc.)
       Memory.hs                -- Alignment and page assertions
       Debug.hs                 -- Size assertions, named labels
+  Emu/
+    Mem.hs                     -- RAM abstraction (IntMap-backed, 64K address space)
+    CPU.hs                     -- CPU state, hand-rolled lenses, flag lenses
+    Step.hs                    -- Instruction execution (all 151 opcodes)
+    Trace.hs                   -- Lazy trace, runUntil, runN, loadProgram
   Target/
     C64.hs                     -- C64 target config
     C64/
@@ -399,4 +410,8 @@ test/
     Target.hs                  -- PRG, D64, data embedding, VICE export tests
 ```
 
-**Dependencies**: `base`, `array`, `containers` (library); adds `bytestring` (executables), `QuickCheck` (tests).
+**Dependencies**: `base`, `array`, `containers` (library); adds `bytestring` (executables), `QuickCheck` + `bytestring` (tests).
+
+## Acknowledgments
+
+The emulator test suite uses the [6502 functional test](https://github.com/Klaus2m5/6502_65C02_functional_tests) by Klaus Dormann, which provides exhaustive validation of NMOS 6502 instruction behavior.

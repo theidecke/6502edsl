@@ -75,6 +75,10 @@ library
                     , Asm.Mos6502.Debug
                     , Asm.Mos6502.Ops16
                     , Target.C64.Data
+                    , Emu.Mem
+                    , Emu.CPU
+                    , Emu.Step
+                    , Emu.Trace
     build-depends:    base ^>=4.20.0.0
                     , array
                     , containers
@@ -111,8 +115,15 @@ test-suite 6502edsl-test
                     , Test.Control
                     , Test.Memory
                     , Test.Target
+                    , Test.Emu.Mem
+                    , Test.Emu.CPU
+                    , Test.Emu.Step
+                    , Test.Emu.Trace
+                    , Test.Emu.Integration
+                    , Test.Emu.Dormann
     build-depends:    base ^>=4.20.0.0
                     , 6502edsl
+                    , bytestring
                     , containers
                     , QuickCheck
     hs-source-dirs:   test
