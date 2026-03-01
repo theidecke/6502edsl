@@ -11,7 +11,7 @@ Haskell embedded DSL for writing 6502 assembly code, targeting the Commodore 64.
 ```bash
 cabal build            # Build the project (library + executable)
 cabal run main         # Run the executable (writes hello.d64 + hello.vs)
-cabal test             # Run the QuickCheck test suite (~100 properties)
+cabal test             # Run the QuickCheck test suite (~116 properties)
 cabal repl             # Interactive GHC REPL (library modules)
 cabal repl exe:main      # REPL with executable + library
 cabal clean            # Clean build artifacts
@@ -22,17 +22,22 @@ cabal clean            # Clean build artifacts
 - **Build system**: Cabal (spec 3.0), GHC2024 language edition, GHC 9.10.1
 - **Version**: 0.2.0.0
 - **Source layout**: Library in `src/`, executable in `app/`, tests in `test/`
-- **Dependencies**: `base`, `containers` (library); adds `bytestring` (exe), `QuickCheck` (test)
+- **Dependencies**: `base`, `array`, `containers` (library); adds `bytestring` (exe), `QuickCheck` (test)
 - **Compiler warnings**: `-Wall` enabled; project builds with zero warnings
 
 ### Module Structure
 
 ```
 src/
-  ISA/Mos6502.hs              -- Opcode/AddressingMode/Instruction data types (all 56 official mnemonics)
+  ISA/Mos6502.hs              -- Single source of truth for the 6502 ISA:
+                               --   data types (Opcode, AddressingMode, Instruction)
+                               --   encode (151-arm pattern match → [Word8])
+                               --   decode (O(1) Array lookup → Instruction constructor)
+                               --   instrSize, baseCycles, canPageCross
   Asm/
     Monad.hs                   -- ASM monad (State + DList writer), MonadFix for forward refs, ZP allocator
-    Mos6502.hs                 -- Instruction emission, operand typeclasses, addressing mode sugar (#, !, tuples)
+    Mos6502.hs                 -- Operand typeclass (toAddrMode), addressing mode sugar (#, !, tuples),
+                               --   instruction emission via ISA.encode
     Mos6502/
       Control.hs               -- Structured control flow (if_eq, while_, for_x, loop_, etc.)
       Ops16.hs                 -- 16-bit arithmetic on Var16 (add16, inc16, cmp16, etc.)
@@ -54,13 +59,23 @@ src/
         Kernal.hs              -- KERNAL jump table + hardware vectors
         System.hs              -- CPU port, system vectors, screen/color RAM, color constants
 app/Main.hs                    -- Example program: fills C64 screen with colored blocks
-test/Main.hs                   -- ~100 QuickCheck properties covering all modules
+test/
+  Main.hs                      -- Test runner (imports all test modules)
+  Test/
+    Helpers.hs                 -- Shared test infrastructure (runner, TestInsn, Arbitrary instances)
+    ISA.hs                     -- ISA tests: lo/hi, table integrity, encode/decode, sizes, cycles
+    Instructions.hs            -- EDSL instruction functions + addressing mode sugar
+    Monad.hs                   -- Monad/PC tracking, branches, ZP allocation
+    Control.hs                 -- Structured control flow + 16-bit operations
+    Memory.hs                  -- Alignment, samePage, fitsIn, annotate, assembleWithLabels
+    Target.hs                  -- PRG, D64, data embedding, VICE label export
 ```
 
 ### Key Design Decisions
 
-- **Single-pass assembly via MonadFix**: Forward label references use `mdo`/`RecursiveDo`. Works because instruction sizes are determined eagerly; only operand values are lazy.
-- **Addressing modes via typeclasses**: `Operand` typeclass with instances for newtypes (`Imm`, `ZP`, `Abs`, etc.), bare types (`Word8` = ZP, `Word16` = Abs), tuples (`(addr, X)`), and singletons (`A`).
+- **ISA as single source of truth**: `ISA.Mos6502` owns all encoding/decoding knowledge. Both the assembler and (future) emulator depend on it, but not on each other. The `encode` function is a direct 151-arm pattern match; `decode` uses an O(1) `Array Word8` lookup table.
+- **Single-pass assembly via MonadFix**: Forward label references use `mdo`/`RecursiveDo`. Works because instruction sizes are determined eagerly (via `instrSize` on `AddressingMode` constructors); only operand values are lazy.
+- **Addressing modes via typeclasses**: `Operand` typeclass with a single method `toAddrMode :: a -> AddressingMode`. Instances for newtypes (`Imm`, `ZP`, `Abs`, etc.), bare types (`Word8` = ZP, `Word16` = Abs), tuples (`(addr, X)`), and singletons (`A`).
 - **`(#)` operator**: Immediate mode sugar (`lda # 0x42`).
 - **`(!)` operator**: Indirect mode sugar via `Indirectable` typeclass (`ptr ! Y`).
 - **Typed ZP variables**: `Var8`, `Var16`, `Ptr` allocated from a `Set Word8` free pool.
@@ -74,3 +89,9 @@ test/Main.hs                   -- ~100 QuickCheck properties covering all module
 - Accumulator-mode shift/rotate: `asl_a` / `asl A` (both work)
 - Memory map constants: `vic*`, `sid*`, `cia1*`/`cia2*`, `kernal*`, `sys*`, `color*` prefixes
 - Tests use deterministic QuickCheck (seed 42, 1000 cases for parametric props)
+- Tests are split into focused modules under `test/Test/`, each exporting a `tests :: [IO Bool]` list
+
+
+## General development principles
+
+- We don't need backwards compatibility, rather strive for a clean, concise and current codebase

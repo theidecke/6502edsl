@@ -2,6 +2,8 @@
 
 A Haskell EDSL for writing 6502 assembly, with first-class support for Commodore 64 targets. Programs are assembled at Haskell runtime and can be exported as `.prg` files or complete `.d64` disk images.
 
+The ISA module (`ISA.Mos6502`) is the single source of truth for the 6502 instruction set — encoding, decoding, sizes, and cycle costs — shared between the assembler and (future) emulator.
+
 ## Setup
 
 Install prerequisites (Ubuntu/Debian):
@@ -103,7 +105,7 @@ Run `cabal run main` to produce `hello.d64`, which can be loaded in VICE or tran
 
 ### Instructions and Addressing Modes
 
-All 56 official 6502 opcodes are supported. Addressing modes are selected by operand type:
+All 56 official 6502 mnemonics (151 opcode/addressing-mode combinations) are supported. Addressing modes are selected by operand type:
 
 ```haskell
 lda # 0x42                    -- Immediate:       LDA #$42
@@ -162,7 +164,7 @@ Emits: `CA D0 FD`
 
 ### Forward References with `mdo`
 
-Forward references require `{-# LANGUAGE RecursiveDo #-}` and `mdo` instead of `do`. This works because instruction sizes are determined eagerly; only operand values are lazy:
+Forward references require `{-# LANGUAGE RecursiveDo #-}` and `mdo` instead of `do`. This works because `instrSize` is determined eagerly from the `AddressingMode` constructor (never forcing operand thunks); only operand values are lazy:
 
 ```haskell
 mdo
@@ -361,3 +363,40 @@ let prg = toPRG 0xC000 bytes
 let d64 = toD64 "DISKNAME" prg
 BS.writeFile "output.d64" (BS.pack d64)
 ```
+
+## Project Structure
+
+```
+src/
+  ISA/Mos6502.hs              -- 6502 ISA: types, encode, decode, instrSize, baseCycles, canPageCross
+  Asm/
+    Monad.hs                   -- ASM monad, MonadFix, ZP allocator
+    Mos6502.hs                 -- Operand typeclass, addressing mode sugar, instruction emission
+    Mos6502/
+      Control.hs               -- Structured control flow (if_eq, while_, for_x, loop_)
+      Ops16.hs                 -- 16-bit arithmetic (add16, inc16, cmp16, etc.)
+      Memory.hs                -- Alignment and page assertions
+      Debug.hs                 -- Size assertions, named labels
+  Target/
+    C64.hs                     -- C64 target config
+    C64/
+      PRG.hs                   -- .prg file format
+      D64.hs                   -- .d64 disk image generation
+      Data.hs                  -- Data embedding (byte, word, petscii)
+      Debug.hs                 -- VICE symbol file export
+      Mem.hs                   -- Full C64 memory map (VIC, SID, CIA, KERNAL)
+app/Main.hs                    -- Example: colored screen fill
+examples/ColorWasher.hs        -- Example: animated color wash effect
+test/
+  Main.hs                      -- Test runner
+  Test/
+    Helpers.hs                 -- Shared test infrastructure
+    ISA.hs                     -- ISA encode/decode/roundtrip tests
+    Instructions.hs            -- EDSL instruction + sugar tests
+    Monad.hs                   -- Monad, branches, ZP allocation tests
+    Control.hs                 -- Control flow + 16-bit ops tests
+    Memory.hs                  -- Alignment, assertions, labels tests
+    Target.hs                  -- PRG, D64, data embedding, VICE export tests
+```
+
+**Dependencies**: `base`, `array`, `containers` (library); adds `bytestring` (executables), `QuickCheck` (tests).
