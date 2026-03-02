@@ -2,6 +2,8 @@
 
 A Haskell EDSL for writing 6502 assembly, with first-class support for Commodore 64 targets. Programs are assembled at Haskell runtime and can be exported as `.prg` files or complete `.d64` disk images.
 
+The project also includes a cycle-accurate NMOS 6502 emulator with a lazy trace API, enabling time-travel debugging and differential memory analysis — all without leaving Haskell.
+
 The ISA module (`ISA.Mos6502`) is the single source of truth for the 6502 instruction set — encoding, decoding, sizes, and cycle costs — shared between the assembler and the emulator.
 
 ## Setup
@@ -35,10 +37,12 @@ cabal --version
 ## Development
 
 ```bash
-cabal build            # Build everything
-cabal run main         # Run the executable (writes hello.d64)
-cabal run color-washer # Run the color-wash demo (writes color-washer.d64)
-cabal test             # Run the test suite
+cabal build              # Build everything
+cabal run main           # Run the executable (writes hello.d64 + hello.vs)
+cabal run color-washer   # Run the color-wash demo (writes color-washer.d64)
+cabal run trace-explorer # Run the emulator trace debugging showcase
+cabal test               # Run the test suite (~196 properties + Dormann)
+cabal bench mem-bench    # Run memory backend benchmarks (Trie vs IntMap)
 ```
 
 ### REPL
@@ -370,6 +374,105 @@ The project includes a cycle-accurate NMOS 6502 emulator (`Emu.*` modules) that 
 
 The emulator is validated against the [Klaus Dormann 6502 functional test suite](https://github.com/Klaus2m5/6502_65C02_functional_tests), which exhaustively tests all instructions, addressing modes, and flag behavior including decimal mode. The test runs ~96 million cycles to completion.
 
+### CPU State and Lenses
+
+`Emu.CPU` provides the CPU state and hand-rolled van Laarhoven lenses (compatible with `microlens`/`lens`):
+
+```haskell
+import Emu.CPU
+
+let s = initCPU               -- A=0, X=0, Y=0, SP=0xFD, P=0x24, PC=0, cycles=0
+view regA s                    -- 0
+set regPC 0x0800 s             -- set program counter
+over regX (+1) s               -- increment X
+view flagC s                   -- read carry flag (Bool)
+set flagZ True s               -- set zero flag
+```
+
+Register lenses: `regA`, `regX`, `regY`, `regSP`, `regP`, `regPC`, `mem`, `cycles`
+
+Flag bit lenses: `flagC`, `flagZ`, `flagI`, `flagD`, `flagB`, `flagV`, `flagN`
+
+Composite lens: `memAt addr` — lens into a single memory byte
+
+### Execution
+
+`Emu.Step` provides fetch-decode-execute:
+
+```haskell
+import Emu.Step (step)
+
+let s1 = step s0               -- execute one instruction at PC
+```
+
+`step` reads the opcode at PC, decodes it via the O(1) lookup table, and dispatches to `execute`. Cycle counts are accumulated, including page-crossing penalties.
+
+### Lazy Traces
+
+`Emu.Trace` provides a lazy infinite list of CPU states and observation combinators:
+
+```haskell
+import Emu.Trace
+
+-- Load a program and run it
+let s0  = loadProgram 0x0800 bytes initCPU
+    tr  = trace s0             -- infinite lazy [CPUState]
+    s10 = runN 10 s0           -- skip ahead 10 steps
+    end = runUntil (\s -> view regPC s == haltAddr) s0
+```
+
+**Observation combinators** — project values from traces without forcing unnecessary states:
+
+```haskell
+-- Track a register over time
+watchReg regA (take 20 tr)     -- [Word8]: A register at each step
+
+-- Watch a memory address evolve
+watchMem 0x0400 (take 100 tr)  -- [Word8]: byte at $0400 at each step
+
+-- Read a 16-bit ZP variable
+watch16 0x02 someState         -- Word16: little-endian from $02/$03
+
+-- Memory diffs between consecutive states
+deltas (take 50 tr)            -- [[(Word16, Word8, Word8)]]: (addr, old, new)
+```
+
+**Time-travel debugging** — the laziness of traces enables patterns like binary search over execution history:
+
+```haskell
+-- Find the exact step that writes to $0400
+let tr = trace s0
+    check n = readByte 0x0400 (cpuMem (tr !! n)) /= 0
+    -- Binary search: bisect [0..1000] check
+```
+
+### Memory Backend
+
+Emulator RAM is backed by a persistent lazy nibble trie (`Emu.Mem.Trie`): a 4-level trie keyed on address nibbles with 16-way branching via `SmallArray`. This provides:
+
+- O(1) read/write (4 hops)
+- ~512 bytes allocation per write (copy-on-write)
+- Structural sharing across trace states
+- Pointer equality optimization in `diffMem` — skips shared subtrees, making diffs of nearly-identical states nearly free
+- Lazy leaf values — preserves thunks from MonadFix assembly through emulation
+
+The original `IntMap.Lazy` implementation is retained as `Emu.Mem.IntMap` for benchmarking. Run `cabal bench mem-bench` to compare.
+
+### Emulator Example
+
+The `trace-explorer` example (`examples/TraceExplorer.hs`) demonstrates the lazy trace API with six interactive demos:
+
+1. **Register evolution** — track a countdown loop's X register
+2. **Memory observation** — watch writes to an address over time
+3. **16-bit variable tracking** — observe carry-propagating increments via `watch16`
+4. **Time-travel debugging** — find the exact instruction that modifies a given address
+5. **Cross-program RAM diff** — compare final states of two programs computing the same result differently
+6. **Trace bisection** — binary search over a trace to find when a screen write occurs
+
+```bash
+cabal run trace-explorer
+```
+
 ## Project Structure
 
 ```
@@ -384,10 +487,13 @@ src/
       Memory.hs                -- Alignment and page assertions
       Debug.hs                 -- Size assertions, named labels
   Emu/
-    Mem.hs                     -- RAM abstraction (IntMap-backed, 64K address space)
-    CPU.hs                     -- CPU state, hand-rolled lenses, flag lenses
-    Step.hs                    -- Instruction execution (all 151 opcodes)
-    Trace.hs                   -- Lazy trace, runUntil, runN, loadProgram
+    Mem.hs                     -- Re-export of Emu.Mem.Trie
+    Mem/
+      Trie.hs                 -- Persistent lazy nibble trie (primary backend)
+      IntMap.hs               -- IntMap implementation (retained for benchmarking)
+    CPU.hs                     -- CPU state, hand-rolled van Laarhoven lenses, flag lenses
+    Step.hs                    -- Instruction execution (all 151 opcodes, cycle counting)
+    Trace.hs                   -- Lazy trace, runUntil, runN, loadProgram, observation combinators
   Target/
     C64.hs                     -- C64 target config
     C64/
@@ -397,9 +503,14 @@ src/
       Debug.hs                 -- VICE symbol file export
       Mem.hs                   -- Full C64 memory map (VIC, SID, CIA, KERNAL)
 app/Main.hs                    -- Example: colored screen fill
-examples/ColorWasher.hs        -- Example: animated color wash effect
+examples/
+  ColorWasher.hs               -- Example: animated color wash with SID audio
+  TraceExplorer.hs             -- Example: emulator trace debugging showcase
+bench/Main.hs                  -- Memory backend benchmarks (Trie vs IntMap)
 test/
-  Main.hs                      -- Test runner
+  Main.hs                      -- Test runner (~196 properties)
+  data/
+    6502_functional_test.bin   -- Klaus Dormann's 6502 functional test (65536 bytes)
   Test/
     Helpers.hs                 -- Shared test infrastructure
     ISA.hs                     -- ISA encode/decode/roundtrip tests
@@ -408,9 +519,17 @@ test/
     Control.hs                 -- Control flow + 16-bit ops tests
     Memory.hs                  -- Alignment, assertions, labels tests
     Target.hs                  -- PRG, D64, data embedding, VICE export tests
+    Emu/
+      Mem.hs                   -- Mem properties: read/write identity, isolation
+      CPU.hs                   -- Lens laws, flag positions, updateNZ, memAt
+      Step.hs                  -- All instruction categories (load/store, arithmetic, etc.)
+      Trace.hs                 -- Trace/runN/loadProgram/combinator properties
+      Integration.hs           -- Assembler-to-emulator bridge tests
+      Dormann.hs               -- Klaus Dormann functional test (~96M cycles)
+      Laziness.hs              -- End-to-end laziness: undefined bytes survive load/step/trace
 ```
 
-**Dependencies**: `base`, `array`, `containers` (library); adds `bytestring` (executables), `QuickCheck` + `bytestring` (tests).
+**Dependencies**: `base`, `array`, `containers`, `primitive` (library); adds `bytestring` (executables), `QuickCheck` + `bytestring` (tests), `tasty-bench` + `deepseq` (benchmarks).
 
 ## Acknowledgments
 

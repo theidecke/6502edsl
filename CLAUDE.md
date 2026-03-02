@@ -20,7 +20,7 @@ cabal clean            # Clean build artifacts
 ## Architecture
 
 - **Build system**: Cabal (spec 3.0), GHC2024 language edition, GHC 9.10.1
-- **Version**: 0.2.0.0
+- **Version**: 0.3.0.0
 - **Source layout**: Library in `src/`, executable in `app/`, tests in `test/`
 - **Dependencies**: `base`, `array`, `containers`, `primitive` (library); adds `bytestring` (exe), `QuickCheck` + `bytestring` (test); `tasty-bench` + `deepseq` (benchmark)
 - **Compiler warnings**: `-Wall` enabled; project builds with zero warnings
