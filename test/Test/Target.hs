@@ -1,6 +1,7 @@
 module Test.Target (tests) where
 
 import Data.Char (ord)
+import Data.Map.Strict qualified as Map
 import Data.Word (Word8, Word16)
 import Test.QuickCheck
 
@@ -146,15 +147,15 @@ prop_charToPetsciiPunctuation =
 
 prop_viceLabelsFormat :: Bool
 prop_viceLabelsFormat =
-    exportViceLabels [("main", 0x0810), ("loop", 0x0820)]
+    exportViceLabels (Map.fromList [(0x0810, ["main"]), (0x0820, ["loop"])])
     == "al C:0810 .main\nal C:0820 .loop\n"
 
 prop_viceLabelsEmpty :: Bool
-prop_viceLabelsEmpty = exportViceLabels [] == ""
+prop_viceLabelsEmpty = exportViceLabels Map.empty == ""
 
 prop_viceLabelsLeadingZeros :: Bool
 prop_viceLabelsLeadingZeros =
-    exportViceLabels [("start", 0x0010)] == "al C:0010 .start\n"
+    exportViceLabels (Map.fromList [(0x0010, ["start"])]) == "al C:0010 .start\n"
 
 -- ---------------------------------------------------------------------------
 -- Test list

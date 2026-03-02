@@ -2,20 +2,21 @@ module Emu.Trace
     ( trace, runUntil, runN, loadProgram, traceForCycles
     , watchReg, watchMem, watch16, deltas, pcCoverage
     , findLastGoodStates, formatStateTable, formatState
-    , formatProfile
+    , formatProfile, displayStack
     , hex8, hex16
     , Map
     ) where
 
 import Control.Exception (evaluate, try, SomeException)
 import Data.Bits (shiftL, (.|.))
-import Data.List (sortBy)
+import Data.List (intercalate, sortBy)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Ord (Down(..))
 import Data.Word (Word8, Word16)
 import Numeric (showHex, showFFloat)
 
+import Asm.Monad (AnnotationStack)
 import Emu.CPU (CPUState, Lens', view, set, over,
                 regPC, regA, regX, regY, regSP, cycles, mem, memAt)
 import Emu.Mem (loadBytes, diffMem)
@@ -72,6 +73,16 @@ pcCoverage :: [CPUState] -> Map Word16 Int
 pcCoverage = foldl' (\m s -> Map.insertWith (+) (view regPC s) 1 m) Map.empty
 
 -- ---------------------------------------------------------------------------
+-- Annotation stack display
+-- ---------------------------------------------------------------------------
+
+-- | Render an annotation stack as a path string (outermost first).
+-- @["inner","outer"]@ becomes @"outer/inner"@.
+displayStack :: AnnotationStack -> String
+displayStack [] = ""
+displayStack xs = intercalate "/" (reverse xs)
+
+-- ---------------------------------------------------------------------------
 -- Debugging helpers
 -- ---------------------------------------------------------------------------
 
@@ -90,8 +101,8 @@ findLastGoodStates windowSize = go 0 []
     takeLast k xs = drop (max 0 (length xs - k)) xs
 
 -- | Format a single CPU state as a debug line.
--- Takes a label map (address -> name), step index, and state.
-formatState :: Map Word16 String -> Int -> CPUState -> String
+-- Takes a label map (address -> annotation stack), step index, and state.
+formatState :: Map Word16 AnnotationStack -> Int -> CPUState -> String
 formatState labelMap i s =
     "  " ++ padR 5 (show i)
         ++ "  $" ++ hex16 (view regPC s)
@@ -103,11 +114,13 @@ formatState labelMap i s =
         ++ "  [" ++ hex8  (view (memAt (view regPC s)) s) ++ "]"
         ++ lookupLabel (view regPC s)
   where
-    lookupLabel addr = maybe "" (\n -> "  (" ++ n ++ ")") (Map.lookup addr labelMap)
+    lookupLabel addr = case Map.lookupLE addr labelMap of
+        Just (_, xs) | not (null xs) -> "  (" ++ displayStack xs ++ ")"
+        _                            -> ""
 
 -- | Format a window of states as a debug table (header + rows).
 -- @startIdx@ is the step number of the first state in the window.
-formatStateTable :: Map Word16 String -> Int -> [CPUState] -> String
+formatStateTable :: Map Word16 AnnotationStack -> Int -> [CPUState] -> String
 formatStateTable labelMap startIdx states = unlines $
     [ "  Step   PC      A   X   Y   SP    Cycles  Label"
     , "  -----  ------  --  --  --  ----  ------  -----"
@@ -116,7 +129,7 @@ formatStateTable labelMap startIdx states = unlines $
 -- | Format a PC coverage map as an execution profile, sorted by hit count
 -- descending.  Each line shows the address, optional label, hit count, and
 -- percentage of total steps.
-formatProfile :: Map Word16 String -> Map Word16 Int -> String
+formatProfile :: Map Word16 AnnotationStack -> Map Word16 Int -> String
 formatProfile labelMap cov = unlines $
     [ "Execution profile (" ++ show totalSteps ++ " steps, "
         ++ show (Map.size cov) ++ " unique addresses)"
@@ -128,7 +141,7 @@ formatProfile labelMap cov = unlines $
     totalSteps = sum (Map.elems cov)
     sorted = sortBy (\a b -> compare (Down (snd a)) (Down (snd b))) (Map.toList cov)
     fmtRow (addr, hits) =
-        let lbl   = Map.findWithDefault "" addr labelMap
+        let lbl   = maybe "" (displayStack . snd) (Map.lookupLE addr labelMap)
             pct   = 100 * fromIntegral hits / fromIntegral totalSteps :: Double
             pctS  = showFFloat (Just 1) pct "%"
         in  "  $" ++ hex16 addr

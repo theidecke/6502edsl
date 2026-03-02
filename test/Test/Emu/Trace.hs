@@ -1,7 +1,8 @@
 module Test.Emu.Trace (tests) where
 
+import Data.List (isInfixOf)
 import Data.Map.Strict qualified as Map
-import Data.Word (Word8)
+import Data.Word (Word8, Word16)
 import Test.QuickCheck
 
 import Test.Helpers (check, section)
@@ -27,6 +28,12 @@ tests =
     , check "pcCoverage 3 NOPs"             prop_pcCoverageNops
     , check "pcCoverage loop"               prop_pcCoverageLoop
     , check "pcCoverage singleton"          prop_pcCoverageSingleton
+    , section "Emu.Trace (annotation-based labels)"
+    , check "exact label address gets label"       prop_rangeLabelExact
+    , check "interior address gets enclosing label" prop_rangeLabelInterior
+    , check "address before any label gets none"   prop_rangeLabelBefore
+    , check "nested labels show path"              prop_nestedLabelsPath
+    , check "empty stack shows no label"           prop_emptyStackNoLabel
     ]
 
 prop_traceHead :: Bool
@@ -150,3 +157,50 @@ prop_pcCoverageSingleton =
     let s0  = loadProgram 0x0800 [0xEA] initCPU
         cov = pcCoverage (take 1 (trace s0))
     in  cov == Map.singleton 0x0800 1
+
+-- ---------------------------------------------------------------------------
+-- Annotation-based label lookup properties
+-- ---------------------------------------------------------------------------
+
+-- | formatProfile: exact label address shows that label
+prop_rangeLabelExact :: Bool
+prop_rangeLabelExact =
+    let labels = Map.fromList [(0x0800 :: Word16, ["myBlock"])]
+        cov    = Map.singleton 0x0800 1
+        output = formatProfile labels cov
+    in  "myBlock" `isInfixOf` output
+
+-- | formatProfile: address after a label inherits that label
+prop_rangeLabelInterior :: Bool
+prop_rangeLabelInterior =
+    let labels = Map.fromList [(0x0800 :: Word16, ["myBlock"])]
+        cov    = Map.singleton 0x0805 1   -- interior address
+        output = formatProfile labels cov
+    in  "myBlock" `isInfixOf` output
+
+-- | formatProfile: address before any label shows no label
+prop_rangeLabelBefore :: Bool
+prop_rangeLabelBefore =
+    let labels = Map.fromList [(0x0800 :: Word16, ["myBlock"])]
+        cov    = Map.singleton 0x07FF 1   -- before the label
+        output = formatProfile labels cov
+        -- The row for $07FF should not contain "myBlock"
+        rows   = filter ("$07ff" `isInfixOf`) (lines output)
+    in  not (any ("myBlock" `isInfixOf`) rows)
+
+-- | formatProfile: nested annotation stacks display as path
+prop_nestedLabelsPath :: Bool
+prop_nestedLabelsPath =
+    let labels = Map.fromList [(0x0800 :: Word16, ["inner", "outer"])]
+        cov    = Map.singleton 0x0800 1
+        output = formatProfile labels cov
+    in  "outer/inner" `isInfixOf` output
+
+-- | formatProfile: empty annotation stack shows no label
+prop_emptyStackNoLabel :: Bool
+prop_emptyStackNoLabel =
+    let labels = Map.fromList [(0x0800 :: Word16, [])]
+        cov    = Map.singleton 0x0800 1
+        output = formatProfile labels cov
+        rows   = filter ("$0800" `isInfixOf`) (lines output)
+    in  not (any ("/" `isInfixOf`) rows)

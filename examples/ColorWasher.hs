@@ -2,6 +2,7 @@
 
 module Main where
 
+import Data.Map.Strict qualified as Map
 import Data.Word (Word8)
 import qualified Data.ByteString as BS
 
@@ -40,7 +41,7 @@ main = do
     BS.writeFile "color-washer.d64" (BS.pack d64)
     putStrLn $ "Wrote color-washer.d64 (" ++ show (length d64) ++ " bytes)"
     writeFile "color-washer.vs" (exportViceLabels labels)
-    putStrLn $ "Wrote color-washer.vs (" ++ show (length labels) ++ " labels)"
+    putStrLn $ "Wrote color-washer.vs (" ++ show (Map.size labels) ++ " labels)"
 
 program :: ASM ()
 program = mdo

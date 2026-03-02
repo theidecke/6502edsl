@@ -1,11 +1,13 @@
 module Asm.Monad
     ( ASM
+    , AnnotationStack
     , TargetConfig (..)
     , emit
     , label
     , assemble
     , assembleWithLabels
-    , recordLabel
+    , pushAnnotation
+    , popAnnotation
     , allocZP
     , lo
     , hi
@@ -13,9 +15,14 @@ module Asm.Monad
 
 import Control.Monad.Fix (MonadFix(..))
 import Data.Bits (shiftR)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Word (Word8, Word16)
+
+-- | Annotation context at a given address: innermost label at head.
+type AnnotationStack = [String]
 
 -- | Target-agnostic configuration for assembling a program.
 data TargetConfig = TargetConfig
@@ -26,11 +33,12 @@ data TargetConfig = TargetConfig
     , chargenRom   :: Maybe FilePath
     } deriving (Show)
 
--- | Internal assembler state: program counter + free zero-page set + labels.
+-- | Internal assembler state: program counter + free zero-page set + annotation stack + labels.
 data AsmState = AsmState
-    { asmPC     :: !Word16
-    , asmFreeZP :: !(Set Word8)
-    , asmLabels :: ![(String, Word16)]
+    { asmPC          :: !Word16
+    , asmFreeZP      :: !(Set Word8)
+    , asmAnnotations :: !AnnotationStack
+    , asmLabels      :: !(Map Word16 AnnotationStack)
     }
 
 -- | The assembler monad. Carries assembler state and a difference list
@@ -74,35 +82,45 @@ instance MonadFix ASM where
         let (a, s', w) = let ASM g = f a in g s
         in  (a, s', w)
 
--- | Emit raw bytes and advance the program counter.
+-- | Emit raw bytes, advance the program counter, and record the current
+-- annotation stack at this address.
 emit :: [Word8] -> ASM ()
 emit bs = ASM $ \s ->
-    ((), s { asmPC = asmPC s + fromIntegral (length bs) }, Endo (bs ++))
+    ((), s { asmPC = asmPC s + fromIntegral (length bs)
+           , asmLabels = Map.insert (asmPC s) (asmAnnotations s) (asmLabels s)
+           }, Endo (bs ++))
 
 -- | Return the current program counter (defines a label).
 label :: ASM Word16
 label = ASM $ \s -> (asmPC s, s, mempty)
 
+-- | Push a name onto the annotation stack (innermost at head).
+pushAnnotation :: String -> ASM ()
+pushAnnotation name = ASM $ \s ->
+    ((), s { asmAnnotations = name : asmAnnotations s }, mempty)
+
+-- | Pop the innermost annotation from the stack.
+popAnnotation :: ASM ()
+popAnnotation = ASM $ \s ->
+    ((), s { asmAnnotations = drop 1 (asmAnnotations s) }, mempty)
+
 -- | Run an assembly block, returning the result, emitted bytes, and
--- collected labels (from 'recordLabel' / 'annotate').
-assembleWithLabels :: TargetConfig -> ASM a -> (a, [Word8], [(String, Word16)])
+-- collected labels (annotation stack per address).
+assembleWithLabels :: TargetConfig -> ASM a -> (a, [Word8], Map Word16 AnnotationStack)
 assembleWithLabels cfg (ASM f) =
-    let s0 = AsmState { asmPC = origin cfg, asmFreeZP = freeZeroPage cfg
-                       , asmLabels = [] }
+    let s0 = AsmState { asmPC = origin cfg
+                       , asmFreeZP = freeZeroPage cfg
+                       , asmAnnotations = []
+                       , asmLabels = Map.empty
+                       }
         (a, s, Endo dl) = f s0
-    in  (a, dl [], reverse (asmLabels s))
+    in  (a, dl [], asmLabels s)
 
 -- | Run an assembly block with the given target configuration.
 assemble :: TargetConfig -> ASM a -> (a, [Word8])
 assemble cfg prog =
     let (a, bs, _labels) = assembleWithLabels cfg prog
     in  (a, bs)
-
--- | Record a named label at the given address.
--- Used by 'annotate' to collect debug symbols.
-recordLabel :: String -> Word16 -> ASM ()
-recordLabel name addr = ASM $ \s ->
-    ((), s { asmLabels = (name, addr) : asmLabels s }, mempty)
 
 -- | Allocate @n@ contiguous bytes from the free zero-page region.
 -- Returns the start address. Fails at assembly time if no contiguous

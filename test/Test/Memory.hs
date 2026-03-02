@@ -1,6 +1,7 @@
 module Test.Memory (tests) where
 
 import Control.Exception (evaluate, try, SomeException)
+import Data.Map.Strict qualified as Map
 
 import Asm.Monad (assemble, assembleWithLabels, emit, label)
 import Asm.Mos6502 (Var8(..), allocVar8, nop, lda, rts, (#))
@@ -74,14 +75,14 @@ prop_fitsInPreservesResult =
     in  pc == 0x0802
 
 -- ---------------------------------------------------------------------------
--- annotate (3 props)
+-- annotate (4 props)
 -- ---------------------------------------------------------------------------
 
 prop_annotateRecordsLabel :: Bool
 prop_annotateRecordsLabel =
     let cfg = simpleConfig 0x0800
         (_, _, labels) = assembleWithLabels cfg (annotate "main" nop)
-    in  labels == [("main", 0x0800)]
+    in  labels == Map.fromList [(0x0800, ["main"])]
 
 prop_annotateMultiple :: Bool
 prop_annotateMultiple =
@@ -89,7 +90,14 @@ prop_annotateMultiple =
         (_, _, labels) = assembleWithLabels cfg $ do
             annotate "first" nop
             annotate "second" nop
-    in  labels == [("first", 0x0800), ("second", 0x0801)]
+    in  labels == Map.fromList [(0x0800, ["first"]), (0x0801, ["second"])]
+
+prop_annotateNested :: Bool
+prop_annotateNested =
+    let cfg = simpleConfig 0x0800
+        (_, _, labels) = assembleWithLabels cfg $
+            annotate "outer" (nop >> annotate "inner" nop)
+    in  labels == Map.fromList [(0x0800, ["outer"]), (0x0801, ["inner", "outer"])]
 
 prop_annotatePreservesResult :: Bool
 prop_annotatePreservesResult =
@@ -116,7 +124,7 @@ prop_assembleWithLabelsOrder =
             annotate "a" nop
             annotate "b" nop
             annotate "c" nop
-    in  map fst labels == ["a", "b", "c"]
+    in  Map.elems labels == [["a"], ["b"], ["c"]]
 
 -- ---------------------------------------------------------------------------
 -- Test list
@@ -145,6 +153,7 @@ tests =
     , section "annotate"
     , checkOnce "records label"             prop_annotateRecordsLabel
     , checkOnce "multiple annotations"      prop_annotateMultiple
+    , checkOnce "nested annotations"        prop_annotateNested
     , checkOnce "preserves result"          prop_annotatePreservesResult
 
     , section "assembleWithLabels"

@@ -1,15 +1,20 @@
 module Target.C64.Debug (exportViceLabels) where
 
+import Data.List (intercalate)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Word (Word16)
 import Numeric (showHex)
 
--- | Generate VICE monitor symbol file content from a list of (name, address)
--- pairs. Each line has the format: @al C:HHHH .name@
-exportViceLabels :: [(String, Word16)] -> String
-exportViceLabels = concatMap formatLabel
+import Asm.Monad (AnnotationStack)
+
+-- | Generate VICE monitor symbol file content from a label map.
+-- Empty annotation stacks are silently dropped.
+exportViceLabels :: Map Word16 AnnotationStack -> String
+exportViceLabels = concatMap formatLabel . Map.toAscList . Map.filter (not . null)
   where
-    formatLabel (name, addr) =
-        "al C:" ++ showHex16 addr ++ " ." ++ name ++ "\n"
+    formatLabel (addr, stack) =
+        "al C:" ++ showHex16 addr ++ " ." ++ intercalate "/" (reverse stack) ++ "\n"
 
     showHex16 :: Word16 -> String
     showHex16 w = pad (showHex w "")
