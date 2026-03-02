@@ -22,7 +22,7 @@ cabal clean            # Clean build artifacts
 - **Build system**: Cabal (spec 3.0), GHC2024 language edition, GHC 9.10.1
 - **Version**: 0.2.0.0
 - **Source layout**: Library in `src/`, executable in `app/`, tests in `test/`
-- **Dependencies**: `base`, `array`, `containers` (library); adds `bytestring` (exe), `QuickCheck` + `bytestring` (test)
+- **Dependencies**: `base`, `array`, `containers`, `primitive` (library); adds `bytestring` (exe), `QuickCheck` + `bytestring` (test); `tasty-bench` + `deepseq` (benchmark)
 - **Compiler warnings**: `-Wall` enabled; project builds with zero warnings
 
 ### Module Structure
@@ -59,7 +59,10 @@ src/
         Kernal.hs              -- KERNAL jump table + hardware vectors
         System.hs              -- CPU port, system vectors, screen/color RAM, color constants
   Emu/
-    Mem.hs                     -- RAM: newtype Mem (IntMap Word8), readByte/writeByte/loadBytes
+    Mem.hs                     -- Thin re-export of Emu.Mem.Trie
+    Mem/
+      Trie.hs                 -- Persistent lazy nibble trie (primary): 4-level, 16-way SmallArray
+      IntMap.hs               -- IntMap-backed implementation (retained for benchmarking)
     CPU.hs                     -- CPUState, hand-rolled van Laarhoven lenses, flag bit lenses,
                                --   memAt composite lens, updateNZ
     Step.hs                    -- execute (Instruction → CPUState → CPUState),
@@ -102,7 +105,7 @@ test/
 - **Assembly-time errors**: `error` calls for invalid addressing modes, out-of-ZP, branch range issues, `fitsIn`/`samePage` violations.
 - **Output formats**: `[Word8]` lists throughout; `toPRG` adds load address header; `toD64` builds complete disk image.
 - **Emulator lenses**: Hand-rolled van Laarhoven `Lens'` using only `Const`/`Identity` from `base` (~50 lines). Type-compatible with `microlens`/`lens` for future migration. Flag lenses address individual bits of the P register.
-- **Emulator memory**: `IntMap.Lazy` from `containers` (already a dependency). Lazy values preserve thunks through `loadBytes`, enabling end-to-end laziness from assembly (MonadFix forward refs) through emulation. `foldl'` in `loadBytes` forces the IntMap structure (no stack overflow) while lazy `insert` keeps value thunks alive. Uninitialized reads return 0x00.
+- **Emulator memory**: Persistent lazy nibble trie (`Emu.Mem.Trie`, primary) — 4-level trie keyed on address nibbles, 16-way branching via `SmallArray` from `primitive`. O(1) read/write (4 hops), ~512 bytes allocation per write, structural sharing across trace states. `Leaf` is deliberately lazy in `Word8` to preserve thunks from MonadFix assembly. `Default` nodes represent uninitialized subtrees (read as 0x00). `diffMem` uses `reallyUnsafePtrEquality#` to skip shared subtrees. The original `IntMap.Lazy` implementation is retained as `Emu.Mem.IntMap` for benchmarking comparison.
 - **Emulator validation**: Klaus Dormann's 6502 functional test exercises all 151 instructions including decimal mode. Success address `$3469` after ~96M cycles.
 
 ## Conventions

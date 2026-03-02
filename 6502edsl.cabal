@@ -76,12 +76,15 @@ library
                     , Asm.Mos6502.Ops16
                     , Target.C64.Data
                     , Emu.Mem
+                    , Emu.Mem.IntMap
+                    , Emu.Mem.Trie
                     , Emu.CPU
                     , Emu.Step
                     , Emu.Trace
     build-depends:    base ^>=4.20.0.0
                     , array
                     , containers
+                    , primitive
     hs-source-dirs:   src
     default-language: GHC2024
 
@@ -137,4 +140,16 @@ test-suite 6502edsl-test
                     , containers
                     , QuickCheck
     hs-source-dirs:   test
+    default-language: GHC2024
+
+benchmark mem-bench
+    import:           warnings
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    build-depends:    base ^>=4.20.0.0
+                    , 6502edsl
+                    , deepseq
+                    , tasty-bench
+    ghc-options:      -O2 -rtsopts
+    hs-source-dirs:   bench
     default-language: GHC2024
