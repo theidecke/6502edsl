@@ -104,6 +104,15 @@ executable color-washer
                     , bytestring
     default-language: GHC2024
 
+executable trace-explorer
+    import:           warnings
+    main-is:          TraceExplorer.hs
+    hs-source-dirs:   examples
+    build-depends:    base ^>=4.20.0.0
+                    , 6502edsl
+                    , containers
+    default-language: GHC2024
+
 test-suite 6502edsl-test
     import:           warnings
     type:             exitcode-stdio-1.0

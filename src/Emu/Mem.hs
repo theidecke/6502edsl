@@ -1,5 +1,5 @@
 module Emu.Mem
-    ( Mem, emptyMem, readByte, writeByte, loadBytes
+    ( Mem, emptyMem, readByte, writeByte, loadBytes, diffMem
     ) where
 
 import Data.IntMap.Strict (IntMap)
@@ -24,3 +24,16 @@ loadBytes :: Word16 -> [Word8] -> Mem -> Mem
 loadBytes base bs (Mem m) = Mem (foldl' go m (zip [fromIntegral base ..] bs))
   where
     go im (a, v) = IM.insert a v im
+
+-- | Compare two memory states, returning (address, old, new) for all differing bytes.
+diffMem :: Mem -> Mem -> [(Word16, Word8, Word8)]
+diffMem (Mem old) (Mem new) =
+    map (\(a, (o, n)) -> (fromIntegral a, o, n)) $ IM.toAscList merged
+  where
+    -- Keys in both maps: keep only where values differ
+    both _k o n = if o == n then Nothing else Just (o, n)
+    -- Keys only in old: old value vs 0
+    onlyOld = IM.map (\o -> (o, 0))
+    -- Keys only in new: 0 vs new value
+    onlyNew = IM.map (\n -> (0, n))
+    merged = IM.mergeWithKey both onlyOld onlyNew old new
