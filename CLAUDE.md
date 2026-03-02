@@ -88,6 +88,7 @@ test/
       Trace.hs                 -- Trace/runN/loadProgram properties
       Integration.hs           -- Assembler→emulator bridge (assemble then execute)
       Dormann.hs               -- Klaus Dormann functional test (~96M cycles to success)
+      Laziness.hs              -- End-to-end laziness: undefined bytes survive load/step/trace
 ```
 
 ### Key Design Decisions
@@ -101,7 +102,7 @@ test/
 - **Assembly-time errors**: `error` calls for invalid addressing modes, out-of-ZP, branch range issues, `fitsIn`/`samePage` violations.
 - **Output formats**: `[Word8]` lists throughout; `toPRG` adds load address header; `toD64` builds complete disk image.
 - **Emulator lenses**: Hand-rolled van Laarhoven `Lens'` using only `Const`/`Identity` from `base` (~50 lines). Type-compatible with `microlens`/`lens` for future migration. Flag lenses address individual bits of the P register.
-- **Emulator memory**: `IntMap.Strict` from `containers` (already a dependency). Uninitialized reads return 0x00. Correctness first; nibble trie is a drop-in optimization later.
+- **Emulator memory**: `IntMap.Lazy` from `containers` (already a dependency). Lazy values preserve thunks through `loadBytes`, enabling end-to-end laziness from assembly (MonadFix forward refs) through emulation. `foldl'` in `loadBytes` forces the IntMap structure (no stack overflow) while lazy `insert` keeps value thunks alive. Uninitialized reads return 0x00.
 - **Emulator validation**: Klaus Dormann's 6502 functional test exercises all 151 instructions including decimal mode. Success address `$3469` after ~96M cycles.
 
 ## Conventions

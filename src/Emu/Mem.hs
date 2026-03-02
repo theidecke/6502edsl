@@ -2,8 +2,8 @@ module Emu.Mem
     ( Mem, emptyMem, readByte, writeByte, loadBytes, diffMem
     ) where
 
-import Data.IntMap.Strict (IntMap)
-import Data.IntMap.Strict qualified as IM
+import Data.IntMap.Lazy (IntMap)
+import Data.IntMap.Lazy qualified as IM
 import Data.Word (Word8, Word16)
 
 -- | 64K address space backed by a sparse IntMap. Uninitialized reads return 0.

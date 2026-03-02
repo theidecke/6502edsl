@@ -130,6 +130,7 @@ test-suite 6502edsl-test
                     , Test.Emu.Trace
                     , Test.Emu.Integration
                     , Test.Emu.Dormann
+                    , Test.Emu.Laziness
     build-depends:    base ^>=4.20.0.0
                     , 6502edsl
                     , bytestring
