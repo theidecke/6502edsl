@@ -4,5 +4,7 @@ dist-newstyle/
 *.dyn_hi
 *.dyn_o
 *~
+*.prg
 *.d64
 *.vs
+*.txt
