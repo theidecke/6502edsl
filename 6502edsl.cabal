@@ -67,6 +67,7 @@ library
                     , Target.C64.Mem.CIA2
                     , Target.C64.Mem.Kernal
                     , Target.C64.Mem.System
+                    , Target.C64.RomLabels
                     , ISA.Mos6502
                     , Asm.Monad
                     , Asm.Mos6502
