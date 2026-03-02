@@ -70,6 +70,9 @@ colorRAM = 0xD800
 basicROM :: Word16
 basicROM = 0xA000
 
+chargenROM :: Word16
+chargenROM = 0xD000
+
 vicIOBase :: Word16
 vicIOBase = 0xD000
 

@@ -21,6 +21,9 @@ import Data.Word (Word8, Word16)
 data TargetConfig = TargetConfig
     { origin       :: Word16
     , freeZeroPage :: Set Word8
+    , kernalRom    :: Maybe FilePath
+    , basicRom     :: Maybe FilePath
+    , chargenRom   :: Maybe FilePath
     } deriving (Show)
 
 -- | Internal assembler state: program counter + free zero-page set + labels.

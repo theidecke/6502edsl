@@ -83,6 +83,7 @@ library
                     , Emu.Trace
     build-depends:    base ^>=4.20.0.0
                     , array
+                    , bytestring
                     , containers
                     , primitive
     hs-source-dirs:   src

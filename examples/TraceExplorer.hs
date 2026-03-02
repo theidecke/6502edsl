@@ -11,7 +11,7 @@ import Asm.Mos6502
 import ISA.Mos6502 (Opcode(..), AddressingMode(..), Instruction(..), encode)
 import Emu.CPU
 import Emu.Mem (diffMem)
-import Emu.Trace
+import Emu.Trace hiding (hex8, hex16)
 
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -22,11 +22,13 @@ import qualified Data.Set as Set
 
 -- | Assemble a program at a given origin.
 asm :: Word16 -> ASM a -> [Word8]
-asm org = snd . assemble TargetConfig { origin = org, freeZeroPage = Set.empty }
+asm org = snd . assemble TargetConfig { origin = org, freeZeroPage = Set.empty
+                                     , kernalRom = Nothing, basicRom = Nothing, chargenRom = Nothing }
 
 -- | Assemble with a ZP free list for variable allocation.
 asmZP :: Word16 -> ASM a -> [Word8]
-asmZP org = snd . assemble TargetConfig { origin = org, freeZeroPage = Set.fromList [0x02..0x0F] }
+asmZP org = snd . assemble TargetConfig { origin = org, freeZeroPage = Set.fromList [0x02..0x0F]
+                                       , kernalRom = Nothing, basicRom = Nothing, chargenRom = Nothing }
 
 -- | Load assembled bytes at origin, return initial state.
 load :: Word16 -> [Word8] -> CPUState

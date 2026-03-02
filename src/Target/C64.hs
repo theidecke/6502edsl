@@ -2,13 +2,18 @@ module Target.C64
     ( C64Subsystems (..)
     , defaultC64Subsystems
     , c64TargetConfig
+    , loadC64Roms
     ) where
 
+import Data.ByteString qualified as BS
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Word (Word8, Word16)
 
 import Asm.Monad (TargetConfig(..))
+import Emu.CPU (CPUState, over, mem)
+import Emu.Mem (loadBytes)
+import Target.C64.Mem.System (basicROM, chargenROM, kernalROM)
 
 -- | Which C64 subsystems are active and therefore occupy zero page addresses.
 data C64Subsystems = C64Subsystems
@@ -41,6 +46,9 @@ c64TargetConfig org subs = TargetConfig
     , freeZeroPage = alwaysFree
         <> basicFree
         <> kernalFree
+    , kernalRom  = Nothing
+    , basicRom   = Nothing
+    , chargenRom = Nothing
     }
   where
     alwaysFree :: Set Word8
@@ -100,3 +108,16 @@ c64TargetConfig org subs = TargetConfig
     irqFree
         | useKernalIRQ subs = Set.empty
         | otherwise         = Set.fromList $ [0xA0 .. 0xA2] ++ [0xC5 .. 0xF6]
+
+-- | Load C64 ROM images into emulator memory based on 'TargetConfig' paths.
+-- Skips any ROM whose path is 'Nothing'.
+loadC64Roms :: TargetConfig -> CPUState -> IO CPUState
+loadC64Roms cfg s0 = do
+    s1 <- loadRom (basicRom   cfg) basicROM   s0
+    s2 <- loadRom (chargenRom cfg) chargenROM s1
+    loadRom (kernalRom cfg) kernalROM s2
+  where
+    loadRom Nothing     _    s = pure s
+    loadRom (Just path) addr s = do
+        bs <- BS.unpack <$> BS.readFile path
+        pure $ over mem (loadBytes addr bs) s

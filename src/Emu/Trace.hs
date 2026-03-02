@@ -1,15 +1,23 @@
 module Emu.Trace
-    ( trace, runUntil, runN, loadProgram
+    ( trace, runUntil, runN, loadProgram, traceForCycles
     , watchReg, watchMem, watch16, deltas, pcCoverage
+    , findLastGoodStates, formatStateTable, formatState
+    , formatProfile
+    , hex8, hex16
     , Map
     ) where
 
+import Control.Exception (evaluate, try, SomeException)
 import Data.Bits (shiftL, (.|.))
+import Data.List (sortBy)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Ord (Down(..))
 import Data.Word (Word8, Word16)
+import Numeric (showHex, showFFloat)
 
-import Emu.CPU (CPUState, Lens', view, set, over, regPC, mem, memAt)
+import Emu.CPU (CPUState, Lens', view, set, over,
+                regPC, regA, regX, regY, regSP, cycles, mem, memAt)
 import Emu.Mem (loadBytes, diffMem)
 import Emu.Step (step)
 
@@ -31,6 +39,10 @@ runN n s = runN (n - 1) (step s)
 -- | Load program bytes at given address and set PC to that address.
 loadProgram :: Word16 -> [Word8] -> CPUState -> CPUState
 loadProgram addr bs = set regPC addr . over mem (loadBytes addr bs)
+
+-- | Trace states up to a cycle limit (exclusive).
+traceForCycles :: Int -> CPUState -> [CPUState]
+traceForCycles maxCycles = takeWhile (\s -> view cycles s < maxCycles) . trace
 
 -- ---------------------------------------------------------------------------
 -- Observation combinators
@@ -58,3 +70,79 @@ deltas states = zipWith (\a b -> diffMem (view mem a) (view mem b)) states (drop
 -- | PC coverage histogram: maps each visited address to its execution count.
 pcCoverage :: [CPUState] -> Map Word16 Int
 pcCoverage = foldl' (\m s -> Map.insertWith (+) (view regPC s) 1 m) Map.empty
+
+-- ---------------------------------------------------------------------------
+-- Debugging helpers
+-- ---------------------------------------------------------------------------
+
+-- | Scan a trace, keeping the last @n@ states.  Stops when forcing the next
+-- state throws an exception (e.g. illegal opcode).
+-- Returns @(totalSteps, lastWindow)@.
+findLastGoodStates :: Int -> [CPUState] -> IO (Int, [CPUState])
+findLastGoodStates windowSize = go 0 []
+  where
+    go !n window [] = pure (n, window)
+    go !n window (s:ss) = do
+        result <- try @SomeException (evaluate (view cycles s))
+        case result of
+            Left _  -> pure (n, window)
+            Right _ -> go (n + 1) (takeLast windowSize (window ++ [s])) ss
+    takeLast k xs = drop (max 0 (length xs - k)) xs
+
+-- | Format a single CPU state as a debug line.
+-- Takes a label map (address -> name), step index, and state.
+formatState :: Map Word16 String -> Int -> CPUState -> String
+formatState labelMap i s =
+    "  " ++ padR 5 (show i)
+        ++ "  $" ++ hex16 (view regPC s)
+        ++ "  " ++ hex8  (view regA s)
+        ++ "  " ++ hex8  (view regX s)
+        ++ "  " ++ hex8  (view regY s)
+        ++ "  $" ++ hex8  (view regSP s)
+        ++ "  " ++ padR 6 (show (view cycles s))
+        ++ "  [" ++ hex8  (view (memAt (view regPC s)) s) ++ "]"
+        ++ lookupLabel (view regPC s)
+  where
+    lookupLabel addr = maybe "" (\n -> "  (" ++ n ++ ")") (Map.lookup addr labelMap)
+
+-- | Format a window of states as a debug table (header + rows).
+-- @startIdx@ is the step number of the first state in the window.
+formatStateTable :: Map Word16 String -> Int -> [CPUState] -> String
+formatStateTable labelMap startIdx states = unlines $
+    [ "  Step   PC      A   X   Y   SP    Cycles  Label"
+    , "  -----  ------  --  --  --  ----  ------  -----"
+    ] ++ zipWith (formatState labelMap) [startIdx..] states
+
+-- | Format a PC coverage map as an execution profile, sorted by hit count
+-- descending.  Each line shows the address, optional label, hit count, and
+-- percentage of total steps.
+formatProfile :: Map Word16 String -> Map Word16 Int -> String
+formatProfile labelMap cov = unlines $
+    [ "Execution profile (" ++ show totalSteps ++ " steps, "
+        ++ show (Map.size cov) ++ " unique addresses)"
+    , ""
+    , "  Address  Label                          Hits  %"
+    , "  -------  ----------------------------  -----  ------"
+    ] ++ map fmtRow sorted
+  where
+    totalSteps = sum (Map.elems cov)
+    sorted = sortBy (\a b -> compare (Down (snd a)) (Down (snd b))) (Map.toList cov)
+    fmtRow (addr, hits) =
+        let lbl   = Map.findWithDefault "" addr labelMap
+            pct   = 100 * fromIntegral hits / fromIntegral totalSteps :: Double
+            pctS  = showFFloat (Just 1) pct "%"
+        in  "  $" ++ hex16 addr
+                ++ "  " ++ padR 28 lbl
+                ++ "  " ++ padR 5 (show hits)
+                ++ "  " ++ pctS
+
+-- | Format a 'Word8' as a zero-padded 2-digit hex string.
+hex8 :: Word8 -> String
+hex8 w = let s = showHex w "" in replicate (2 - length s) '0' ++ s
+
+-- | Format a 'Word16' as a zero-padded 4-digit hex string.
+hex16 :: Word16 -> String
+hex16 w = let s = showHex w "" in replicate (4 - length s) '0' ++ s
+
+padR :: Int -> String -> String
+padR n s = s ++ replicate (max 0 (n - length s)) ' '

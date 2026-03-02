@@ -26,7 +26,8 @@ import ISA.Mos6502 (Instruction(..), decode, encode)
 -- ---------------------------------------------------------------------------
 
 simpleConfig :: Word16 -> TargetConfig
-simpleConfig org = TargetConfig { origin = org, freeZeroPage = Set.empty }
+simpleConfig org = TargetConfig { origin = org, freeZeroPage = Set.empty
+                               , kernalRom = Nothing, basicRom = Nothing, chargenRom = Nothing }
 
 asm :: ASM a -> [Word8]
 asm = snd . assemble (simpleConfig 0x0000)
@@ -35,7 +36,8 @@ asmAt :: Word16 -> ASM a -> [Word8]
 asmAt org = snd . assemble (simpleConfig org)
 
 zpConfig :: [Word8] -> TargetConfig
-zpConfig addrs = TargetConfig { origin = 0x0000, freeZeroPage = Set.fromList addrs }
+zpConfig addrs = TargetConfig { origin = 0x0000, freeZeroPage = Set.fromList addrs
+                             , kernalRom = Nothing, basicRom = Nothing, chargenRom = Nothing }
 
 asmZP :: ASM a -> [Word8]
 asmZP = snd . assemble (c64TargetConfig 0x0800 defaultC64Subsystems { useBasic = False })
