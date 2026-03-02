@@ -68,7 +68,8 @@ src/
     Step.hs                    -- execute (Instruction → CPUState → CPUState),
                                --   step (fetch-decode-execute), all 151 instructions,
                                --   BCD decimal mode, JMP indirect page bug, cycle counting
-    Trace.hs                   -- trace (lazy infinite [CPUState]), runUntil, runN, loadProgram
+    Trace.hs                   -- trace (lazy infinite [CPUState]), runUntil, runN, loadProgram,
+                               --   watchReg, watchMem, watch16, deltas, pcCoverage
 app/Main.hs                    -- Example program: fills C64 screen with colored blocks
 test/
   Main.hs                      -- Test runner (imports all test modules)

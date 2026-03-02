@@ -1,9 +1,12 @@
 module Emu.Trace
     ( trace, runUntil, runN, loadProgram
-    , watchReg, watchMem, watch16, deltas
+    , watchReg, watchMem, watch16, deltas, pcCoverage
+    , Map
     ) where
 
 import Data.Bits (shiftL, (.|.))
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Word (Word8, Word16)
 
 import Emu.CPU (CPUState, Lens', view, set, over, regPC, mem, memAt)
@@ -51,3 +54,7 @@ watch16 zpAddr s =
 -- | Memory diffs between consecutive trace states.
 deltas :: [CPUState] -> [[(Word16, Word8, Word8)]]
 deltas states = zipWith (\a b -> diffMem (view mem a) (view mem b)) states (drop 1 states)
+
+-- | PC coverage histogram: maps each visited address to its execution count.
+pcCoverage :: [CPUState] -> Map Word16 Int
+pcCoverage = foldl' (\m s -> Map.insertWith (+) (view regPC s) 1 m) Map.empty

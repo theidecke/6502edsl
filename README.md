@@ -435,6 +435,9 @@ watch16 0x02 someState         -- Word16: little-endian from $02/$03
 
 -- Memory diffs between consecutive states
 deltas (take 50 tr)            -- [[(Word16, Word8, Word8)]]: (addr, old, new)
+
+-- PC coverage histogram (address → execution count)
+pcCoverage (take 1000 tr)      -- Map Word16 Int: hot-loop detection
 ```
 
 **Time-travel debugging** — the laziness of traces enables patterns like binary search over execution history:
@@ -460,7 +463,7 @@ The original `IntMap.Lazy` implementation is retained as `Emu.Mem.IntMap` for be
 
 ### Emulator Example
 
-The `trace-explorer` example (`examples/TraceExplorer.hs`) demonstrates the lazy trace API with six interactive demos:
+The `trace-explorer` example (`examples/TraceExplorer.hs`) demonstrates the lazy trace API with seven interactive demos:
 
 1. **Register evolution** — track a countdown loop's X register
 2. **Memory observation** — watch writes to an address over time
@@ -468,6 +471,7 @@ The `trace-explorer` example (`examples/TraceExplorer.hs`) demonstrates the lazy
 4. **Time-travel debugging** — find the exact instruction that modifies a given address
 5. **Cross-program RAM diff** — compare final states of two programs computing the same result differently
 6. **Trace bisection** — binary search over a trace to find when a screen write occurs
+7. **PC coverage** — execution profile histogram via `pcCoverage`, showing hot/warm/cold paths in a loop with conditional branches
 
 ```bash
 cabal run trace-explorer

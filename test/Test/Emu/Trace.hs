@@ -1,5 +1,6 @@
 module Test.Emu.Trace (tests) where
 
+import Data.Map.Strict qualified as Map
 import Data.Word (Word8)
 import Test.QuickCheck
 
@@ -22,6 +23,10 @@ tests =
     , check "deltas NOPs are empty"          prop_deltasNop
     , check "deltas STA produces diff"       prop_deltasSta
     , check "deltas length"                  prop_deltasLength
+    , section "Emu.Trace (pcCoverage)"
+    , check "pcCoverage 3 NOPs"             prop_pcCoverageNops
+    , check "pcCoverage loop"               prop_pcCoverageLoop
+    , check "pcCoverage singleton"          prop_pcCoverageSingleton
     ]
 
 prop_traceHead :: Bool
@@ -115,3 +120,33 @@ prop_deltasLength (Positive n') =
         s0 = loadProgram 0x0800 (replicate (n + 1) 0xEA) initCPU
         t  = take (n + 1) (trace s0)
     in  length (deltas t) == n
+
+-- ---------------------------------------------------------------------------
+-- pcCoverage properties
+-- ---------------------------------------------------------------------------
+
+-- | 3 NOPs: each address visited exactly once (4 states = initial + 3 steps)
+prop_pcCoverageNops :: Bool
+prop_pcCoverageNops =
+    let s0  = loadProgram 0x0800 [0xEA, 0xEA, 0xEA] initCPU
+        t   = take 4 (trace s0)
+        cov = pcCoverage t
+    in  cov == Map.fromList [(0x0800, 1), (0x0801, 1), (0x0802, 1), (0x0803, 1)]
+
+-- | Loop: JMP-to-self address has count > 1, total matches trace length
+prop_pcCoverageLoop :: Bool
+prop_pcCoverageLoop =
+    -- NOP; JMP $0801 → PC visits 0800 once, 0801 nine times
+    let s0  = loadProgram 0x0800 [0xEA, 0x4C, 0x01, 0x08] initCPU
+        t   = take 10 (trace s0)
+        cov = pcCoverage t
+    in  Map.lookup 0x0800 cov == Just 1 &&
+        Map.lookup 0x0801 cov == Just 9 &&
+        sum (Map.elems cov) == 10
+
+-- | Single-state trace → single entry with count 1
+prop_pcCoverageSingleton :: Bool
+prop_pcCoverageSingleton =
+    let s0  = loadProgram 0x0800 [0xEA] initCPU
+        cov = pcCoverage (take 1 (trace s0))
+    in  cov == Map.singleton 0x0800 1

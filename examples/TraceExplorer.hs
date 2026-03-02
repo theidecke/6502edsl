@@ -13,6 +13,7 @@ import Emu.CPU
 import Emu.Mem (diffMem)
 import Emu.Trace
 
+import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 
 -- ---------------------------------------------------------------------------
@@ -254,6 +255,75 @@ demo6_traceBisection = do
     putStrLn $ "  -> bisectTrace pinpointed the STA instruction in O(log n) probes"
 
 -- ---------------------------------------------------------------------------
+-- 7. PC Coverage Histogram
+-- ---------------------------------------------------------------------------
+
+demo7_pcCoverage :: IO ()
+demo7_pcCoverage = do
+    heading "7. PC Coverage: Execution Profile"
+    putStrLn "  Program: LDX #$06; loop: TXA; AND #$01; BEQ skip;"
+    putStrLn "           INC $0300; skip: DEX; BNE loop"
+    putStrLn "  (INC only executes when X is odd: X=5, 3, 1)"
+    putStrLn ""
+
+    -- Assemble the program with a conditional path inside a loop
+    let bs = asm 0x0800 $ mdo
+                ldx # (0x06 :: Word8)   -- $0800: setup
+                loop <- label           -- $0802
+                txa                     -- TXA
+                and_ # (0x01 :: Word8)  -- AND #$01 (odd/even check)
+                beq skip                -- BEQ skip (skip INC if even)
+                inc (0x0300 :: Word16)  -- INC $0300 (odd-only path)
+                skip <- label           -- $080A
+                dex                     -- DEX
+                bne loop                -- BNE loop
+                nop                     -- post-loop sentinel
+        s0  = load 0x0800 bs
+        -- 1 LDX + 6 iterations (5 or 6 steps each) = 35 states
+        t   = take 35 (trace s0)
+        cov = pcCoverage t
+
+    -- Instruction labels for display
+    let labels = [ (0x0800, "LDX #$06")
+                 , (0x0802, "TXA")
+                 , (0x0803, "AND #$01")
+                 , (0x0805, "BEQ skip")
+                 , (0x0807, "INC $0300")
+                 , (0x080A, "DEX")
+                 , (0x080B, "BNE loop")
+                 , (0x080D, "NOP")
+                 ]
+        maxCount = maximum (Map.elems cov)
+        barWidth = 30 :: Int
+
+    -- Display by address order
+    putStrLn "  Address  Instruction   Count  Profile"
+    putStrLn "  -------  -----------   -----  -------"
+    mapM_ (\(addr, name) ->
+        let count = Map.findWithDefault 0 addr cov
+            barLen = (count * barWidth) `div` maxCount
+            bar    = replicate barLen '█'
+            heat | count == maxCount = " ← hot"
+                 | count == 1        = " ← cold"
+                 | otherwise         = " ← warm"
+        in  putStrLn $ "  " ++ hex16 addr ++ "   " ++ padR 12 name
+                     ++ "  " ++ padR 5 (show count) ++ "  " ++ bar ++ heat
+        ) labels
+
+    -- Summary sorted by count (descending)
+    putStrLn ""
+    let (hotAddr, hotCount) = Map.foldlWithKey'
+            (\(a, c) a' c' -> if c' > c then (a', c') else (a, c))
+            (0, 0) cov
+    putStrLn $ "  Hottest address: " ++ hex16 hotAddr
+             ++ " (" ++ show hotCount ++ " hits)"
+    putStrLn $ "  Unique addresses visited: " ++ show (Map.size cov)
+    putStrLn $ "  Total instruction fetches: " ++ show (sum (Map.elems cov))
+
+padR :: Int -> String -> String
+padR n s = s ++ replicate (n - length s) ' '
+
+-- ---------------------------------------------------------------------------
 -- Main
 -- ---------------------------------------------------------------------------
 
@@ -267,5 +337,6 @@ main = do
     demo4_timeTravelDebug
     demo5_crossProgramDiff
     demo6_traceBisection
+    demo7_pcCoverage
     putStrLn ""
     putStrLn "Done."
