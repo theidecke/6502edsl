@@ -18,6 +18,7 @@ import Test.QuickCheck.Random (mkQCGen)
 
 import Asm.Monad (ASM, TargetConfig(..), assemble)
 import Asm.Mos6502 (Imm(..), ZP(..), ZPX(..), ZPY(..), Abs(..), AbsX(..), AbsY(..), Ind(..), IndX(..), IndY(..))
+import Target.C64 (c64TargetConfig, defaultC64Subsystems, C64Subsystems(..))
 import ISA.Mos6502 (Instruction(..), decode, encode)
 
 -- ---------------------------------------------------------------------------
@@ -37,7 +38,7 @@ zpConfig :: [Word8] -> TargetConfig
 zpConfig addrs = TargetConfig { origin = 0x0000, freeZeroPage = Set.fromList addrs }
 
 asmZP :: ASM a -> [Word8]
-asmZP = snd . assemble (zpConfig [0x02..0x0F])
+asmZP = snd . assemble (c64TargetConfig 0x0800 defaultC64Subsystems { useBasic = False })
 
 -- ---------------------------------------------------------------------------
 -- TestInsn: random valid 6502 instructions
