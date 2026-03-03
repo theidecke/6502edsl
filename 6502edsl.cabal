@@ -132,6 +132,7 @@ test-suite 6502edsl-test
     other-modules:    Test.Helpers
                     , Test.ISA
                     , Test.Instructions
+                    , Test.Label
                     , Test.Monad
                     , Test.Control
                     , Test.Memory

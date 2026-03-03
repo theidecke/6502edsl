@@ -4,6 +4,7 @@ import System.Exit (exitFailure)
 
 import Test.ISA qualified
 import Test.Instructions qualified
+import Test.Label qualified
 import Test.Monad qualified
 import Test.Control qualified
 import Test.Memory qualified
@@ -22,6 +23,7 @@ main = do
     ok <- fmap and . sequence $ concat
         [ Test.ISA.tests
         , Test.Instructions.tests
+        , Test.Label.tests
         , Test.Monad.tests
         , Test.Control.tests
         , Test.Memory.tests

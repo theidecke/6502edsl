@@ -40,7 +40,7 @@ module Asm.Mos6502
 import Data.Word (Word8, Word16)
 import Numeric (showHex)
 
-import Asm.Monad (MonadASM(..), MonadZPAlloc(..), ToAddr(..))
+import Asm.Monad (MonadASM(..), MonadZPAlloc(..), Label(..), ToAddr(..))
 import ISA.Mos6502 (Opcode(..), AddressingMode(..), Instruction(..))
 
 -- ---------------------------------------------------------------------------
@@ -123,11 +123,14 @@ instance Operand Word16 where toAddrMode w          = Absolute w
 instance Operand A_     where toAddrMode _           = Accumulator
 instance Operand Var8   where toAddrMode (Var8 a)   = ZeroPage a
 instance Operand Ptr    where toAddrMode (Ptr a)    = ZeroPage a
+instance Operand Label  where toAddrMode l          = Absolute (labelAddr l)
 
 instance Operand (Word8,  X_) where toAddrMode (w, _) = ZeroPageX w
 instance Operand (Word8,  Y_) where toAddrMode (w, _) = ZeroPageY w
 instance Operand (Word16, X_) where toAddrMode (w, _) = AbsoluteX w
 instance Operand (Word16, Y_) where toAddrMode (w, _) = AbsoluteY w
+instance Operand (Label,  X_) where toAddrMode (l, _) = AbsoluteX (labelAddr l)
+instance Operand (Label,  Y_) where toAddrMode (l, _) = AbsoluteY (labelAddr l)
 instance Operand (Var8,   X_) where toAddrMode (Var8 a, _) = ZeroPageX a
 instance Operand (Var8,   Y_) where toAddrMode (Var8 a, _) = ZeroPageY a
 instance Operand (Ptr,    X_) where toAddrMode (Ptr a, _)  = ZeroPageX a
