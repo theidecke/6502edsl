@@ -6,7 +6,7 @@ import Control.Exception (evaluate, try, SomeException)
 import Data.Word (Word8, Word16)
 import Test.QuickCheck hiding (label)
 
-import Asm.Monad (assemble, emit, label, currentPC, allocZP)
+import Asm.Monad (assemble, MonadASM(..), MonadZPAlloc(..), label)
 import Asm.Mos6502
 import Test.Helpers
 
@@ -22,19 +22,19 @@ prop_labelReturnsOrigin org =
 prop_emitAdvancesPC :: Word16 -> [Word8] -> Property
 prop_emitAdvancesPC org bs =
     length bs < 256 ==>
-        let (pc, _) = assemble (simpleConfig org) (emit bs >> currentPC)
+        let (pc, _) = assemble (simpleConfig org) (emitBytes bs >> currentPC)
         in  pc == org + fromIntegral (length bs)
 
 prop_sequenceAdditive :: Word16 -> [Word8] -> [Word8] -> Property
 prop_sequenceAdditive org a b =
     length a + length b < 256 ==>
-        let (pc, _) = assemble (simpleConfig org) (emit a >> emit b >> currentPC)
+        let (pc, _) = assemble (simpleConfig org) (emitBytes a >> emitBytes b >> currentPC)
         in  pc == org + fromIntegral (length a + length b)
 
 prop_sequenceBytesConcat :: [Word8] -> [Word8] -> Property
 prop_sequenceBytesConcat a b =
     length a + length b < 256 ==>
-        asm (emit a >> emit b) == a ++ b
+        asm (emitBytes a >> emitBytes b) == a ++ b
 
 -- ---------------------------------------------------------------------------
 -- Branch offsets (4 props)
@@ -83,7 +83,7 @@ prop_branchMaxForward :: Bool
 prop_branchMaxForward =
     let bytes = asm $ mdo
             beq skip
-            emit (replicate 127 0xEA)
+            emitBytes (replicate 127 0xEA)
             skip <- label
             pure ()
     in  bytes !! 1 == 0x7F
@@ -92,7 +92,7 @@ prop_branchMaxBackward :: Bool
 prop_branchMaxBackward =
     let bytes = asm $ do
             loop <- label
-            emit (replicate 126 0xEA)
+            emitBytes (replicate 126 0xEA)
             bne loop
     in  let offset = bytes !! (126 + 1)
         in  offset == 0x80
@@ -101,7 +101,7 @@ prop_branchOutOfRangeForward :: IO Bool
 prop_branchOutOfRangeForward = do
     let bytes = asm $ mdo
             beq skip
-            emit (replicate 128 0xEA)
+            emitBytes (replicate 128 0xEA)
             skip <- label
             pure ()
     result <- try (evaluate (sum bytes)) :: IO (Either SomeException Word8)
@@ -111,7 +111,7 @@ prop_branchOutOfRangeBackward :: IO Bool
 prop_branchOutOfRangeBackward = do
     let bytes = asm $ do
             loop <- label
-            emit (replicate 127 0xEA)
+            emitBytes (replicate 127 0xEA)
             bne loop
     result <- try (evaluate (sum bytes)) :: IO (Either SomeException Word8)
     pure $ isLeft result
@@ -162,7 +162,7 @@ tests :: [IO Bool]
 tests =
     [ section "Monad / PC tracking"
     , check "label returns origin"     prop_labelReturnsOrigin
-    , check "emit advances PC"         prop_emitAdvancesPC
+    , check "emitBytes advances PC"         prop_emitAdvancesPC
     , check "sequence additive"        prop_sequenceAdditive
     , check "sequence bytes concat"    prop_sequenceBytesConcat
 

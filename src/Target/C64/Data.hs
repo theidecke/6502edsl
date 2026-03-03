@@ -1,26 +1,24 @@
-module Target.C64.Data (byte, word, petscii, pstring, charToPetscii) where
+module Target.C64.Data
+    ( -- * Generic data embedding (re-exported from Asm.Mos6502.Data)
+      byte, word
+      -- * C64-specific data embedding
+    , petscii, pstring, charToPetscii
+    ) where
 
 import Data.Char (ord)
-import Data.Word (Word8, Word16)
+import Data.Word (Word8)
 
-import Asm.Monad (ASM, emit, lo, hi)
-
--- | Emit raw bytes into the output stream.
-byte :: [Word8] -> ASM ()
-byte = emit
-
--- | Emit 16-bit words as little-endian byte pairs.
-word :: [Word16] -> ASM ()
-word ws = emit (concatMap (\w -> [lo w, hi w]) ws)
+import Asm.Monad (MonadASM(..))
+import Asm.Mos6502.Data (byte, word)
 
 -- | Convert a Haskell 'String' to PETSCII (unshifted/uppercase mode)
 -- and emit it.
-petscii :: String -> ASM ()
-petscii s = emit (map charToPetscii s)
+petscii :: MonadASM m => String -> m ()
+petscii s = emitBytes (map charToPetscii s)
 
 -- | Emit a null-terminated PETSCII string.
-pstring :: String -> ASM ()
-pstring s = petscii s >> emit [0x00]
+pstring :: MonadASM m => String -> m ()
+pstring s = petscii s >> emitBytes [0x00]
 
 -- | Convert an ASCII 'Char' to a PETSCII byte (unshifted/uppercase mode).
 --

@@ -5,7 +5,7 @@ import Data.Map.Strict qualified as Map
 
 import Data.Word (Word16)
 
-import Asm.Monad (assemble, assembleWithLabels, emit, currentPC)
+import Asm.Monad (assemble, assembleWithLabels, MonadASM(..))
 import Asm.Mos6502 (Var8(..), allocVar8, nop, lda, rts, (#))
 import Asm.Mos6502.Memory (align, alignPage, samePage)
 import Asm.Mos6502.Debug (fitsIn, annotate)
@@ -46,7 +46,7 @@ prop_samePagePasses =
 
 prop_samePageFails :: IO Bool
 prop_samePageFails = do
-    let prog = do emit [0x00, 0x00]; samePage (0x0800 :: Word16)
+    let prog = do emitBytes [0x00, 0x00]; samePage (0x0800 :: Word16)
         bytes = snd (assemble (simpleConfig 0x08FF) prog)
     result <- try (evaluate (length bytes)) :: IO (Either SomeException Int)
     pure $ isLeft result

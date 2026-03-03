@@ -1,19 +1,15 @@
 module Asm.Monad
     ( ASM
+    , MonadASM(..)
+    , MonadZPAlloc(..)
     , AnnotationStack
     , TargetConfig (..)
     , Label(..)
     , ToAddr(..)
-    , emit
-    , currentPC
     , label
     , namedLabel
-    , registerLabel
     , assemble
     , assembleWithLabels
-    , pushAnnotation
-    , popAnnotation
-    , allocZP
     , lo
     , hi
     ) where
@@ -25,6 +21,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Word (Word8, Word16)
+
+import ISA.Mos6502 (Instruction, encode)
 
 -- | A label with a lazy address and an optional name.
 data Label = Label
@@ -38,6 +36,48 @@ class ToAddr a where
 
 instance ToAddr Word16 where toAddr = id
 instance ToAddr Label  where toAddr = labelAddr
+
+-- ---------------------------------------------------------------------------
+-- MonadASM typeclass
+-- ---------------------------------------------------------------------------
+
+-- | Typeclass for assembly monads. Both the byte assembler ('ASM') and
+-- the ACME text exporter are instances.
+class (Monad m, MonadFix m) => MonadASM m where
+    emitInstruction :: Instruction -> m ()
+    emitBytes       :: [Word8] -> m ()
+    currentPC       :: m Word16
+    registerLabel   :: Label -> m ()
+    pushAnnotation  :: String -> m ()
+    popAnnotation   :: m ()
+
+-- | Zero-page allocation (only available in the concrete assembler).
+class MonadASM m => MonadZPAlloc m where
+    allocZP :: Int -> m Word8
+
+-- ---------------------------------------------------------------------------
+-- Derived sugar (polymorphic)
+-- ---------------------------------------------------------------------------
+
+-- | Create an unnamed label at the current program counter.
+label :: MonadASM m => m Label
+label = do
+    pc <- currentPC
+    let l = Label pc Nothing
+    registerLabel l
+    pure l
+
+-- | Create a named label at the current program counter.
+namedLabel :: MonadASM m => String -> m Label
+namedLabel name = do
+    pc <- currentPC
+    let l = Label pc (Just name)
+    registerLabel l
+    pure l
+
+-- ---------------------------------------------------------------------------
+-- ASM monad (concrete byte assembler)
+-- ---------------------------------------------------------------------------
 
 -- | Annotation context at a given address: innermost label at head.
 type AnnotationStack = [String]
@@ -101,48 +141,28 @@ instance MonadFix ASM where
         let (a, s', w) = let ASM g = f a in g s
         in  (a, s', w)
 
--- | Emit raw bytes, advance the program counter, and record the current
--- annotation stack at this address.
-emit :: [Word8] -> ASM ()
-emit bs = ASM $ \s ->
-    ((), s { asmPC = asmPC s + fromIntegral (length bs)
-           , asmAnnotationMap = Map.insert (asmPC s) (asmAnnotations s) (asmAnnotationMap s)
-           }, Endo (bs ++))
+instance MonadASM ASM where
+    emitInstruction instr = emitBytes (encode instr)
+    emitBytes bs = ASM $ \s ->
+        ((), s { asmPC = asmPC s + fromIntegral (length bs)
+               , asmAnnotationMap = Map.insert (asmPC s) (asmAnnotations s) (asmAnnotationMap s)
+               }, Endo (bs ++))
+    currentPC = ASM $ \s -> (asmPC s, s, mempty)
+    registerLabel lbl = ASM $ \s ->
+        ((), s { asmLabels = lbl : asmLabels s }, mempty)
+    pushAnnotation name = ASM $ \s ->
+        ((), s { asmAnnotations = name : asmAnnotations s }, mempty)
+    popAnnotation = ASM $ \s ->
+        ((), s { asmAnnotations = drop 1 (asmAnnotations s) }, mempty)
 
--- | Return the current program counter.
-currentPC :: ASM Word16
-currentPC = ASM $ \s -> (asmPC s, s, mempty)
-
--- | Create an unnamed label at the current program counter.
-label :: ASM Label
-label = do
-    pc <- currentPC
-    let l = Label pc Nothing
-    registerLabel l
-    pure l
-
--- | Create a named label at the current program counter.
-namedLabel :: String -> ASM Label
-namedLabel name = do
-    pc <- currentPC
-    let l = Label pc (Just name)
-    registerLabel l
-    pure l
-
--- | Register a label in the assembler state.
-registerLabel :: Label -> ASM ()
-registerLabel lbl = ASM $ \s ->
-    ((), s { asmLabels = lbl : asmLabels s }, mempty)
-
--- | Push a name onto the annotation stack (innermost at head).
-pushAnnotation :: String -> ASM ()
-pushAnnotation name = ASM $ \s ->
-    ((), s { asmAnnotations = name : asmAnnotations s }, mempty)
-
--- | Pop the innermost annotation from the stack.
-popAnnotation :: ASM ()
-popAnnotation = ASM $ \s ->
-    ((), s { asmAnnotations = drop 1 (asmAnnotations s) }, mempty)
+instance MonadZPAlloc ASM where
+    allocZP n
+        | n <= 0    = error "allocZP: requested size must be positive"
+        | otherwise = ASM $ \s ->
+            let free = asmFreeZP s
+                start = findContiguous n (Set.toAscList free)
+                block = Set.fromList [start .. start + fromIntegral n - 1]
+            in  (start, s { asmFreeZP = free `Set.difference` block }, mempty)
 
 -- | Run an assembly block, returning the result, emitted bytes,
 -- collected annotations (annotation stack per address), and registered labels.
@@ -163,17 +183,9 @@ assemble cfg prog =
     let (a, bs, _annotations, _labels) = assembleWithLabels cfg prog
     in  (a, bs)
 
--- | Allocate @n@ contiguous bytes from the free zero-page region.
--- Returns the start address. Fails at assembly time if no contiguous
--- block of the requested size is available.
-allocZP :: Int -> ASM Word8
-allocZP n
-    | n <= 0    = error "allocZP: requested size must be positive"
-    | otherwise = ASM $ \s ->
-        let free = asmFreeZP s
-            start = findContiguous n (Set.toAscList free)
-            block = Set.fromList [start .. start + fromIntegral n - 1]
-        in  (start, s { asmFreeZP = free `Set.difference` block }, mempty)
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
 
 -- | Find @n@ contiguous bytes in a sorted list of free addresses.
 findContiguous :: Int -> [Word8] -> Word8

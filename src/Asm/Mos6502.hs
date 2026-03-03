@@ -40,8 +40,8 @@ module Asm.Mos6502
 import Data.Word (Word8, Word16)
 import Numeric (showHex)
 
-import Asm.Monad (ASM, emit, currentPC, allocZP, ToAddr(..))
-import ISA.Mos6502 (Opcode(..), AddressingMode(..), Instruction(..), encode)
+import Asm.Monad (MonadASM(..), MonadZPAlloc(..), ToAddr(..))
+import ISA.Mos6502 (Opcode(..), AddressingMode(..), Instruction(..))
 
 -- ---------------------------------------------------------------------------
 -- Operand newtypes
@@ -139,7 +139,7 @@ instance Operand (Ptr,    Y_) where toAddrMode (Ptr a, _)  = ZeroPageY a
 
 infixl 8 #
 
-(#) :: (Imm -> ASM ()) -> Word8 -> ASM ()
+(#) :: (Imm -> m ()) -> Word8 -> m ()
 f # v = f (Imm v)
 
 -- ---------------------------------------------------------------------------
@@ -160,29 +160,29 @@ instance Indirectable Ptr   X_ IndX where (!) (Ptr a) X = IndX a
 -- Typed allocation
 -- ---------------------------------------------------------------------------
 
-allocVar8 :: ASM Var8
+allocVar8 :: MonadZPAlloc m => m Var8
 allocVar8 = Var8 <$> allocZP 1
 
-allocVar16 :: ASM Var16
+allocVar16 :: MonadZPAlloc m => m Var16
 allocVar16 = Var16 <$> allocZP 2
 
-allocPtr :: ASM Ptr
+allocPtr :: MonadZPAlloc m => m Ptr
 allocPtr = Ptr <$> allocZP 2
 
 -- ---------------------------------------------------------------------------
 -- Instruction emission helpers
 -- ---------------------------------------------------------------------------
 
-emitOp :: Operand op => Opcode -> op -> ASM ()
-emitOp opc op = emit (encode (Instruction opc (toAddrMode op)))
+emitOp :: (MonadASM m, Operand op) => Opcode -> op -> m ()
+emitOp opc op = emitInstruction (Instruction opc (toAddrMode op))
 
-emitImplied :: Opcode -> ASM ()
-emitImplied opc = emit (encode (Instruction opc Implied))
+emitImplied :: MonadASM m => Opcode -> m ()
+emitImplied opc = emitInstruction (Instruction opc Implied)
 
-emitAccum :: Opcode -> ASM ()
-emitAccum opc = emit (encode (Instruction opc Accumulator))
+emitAccum :: MonadASM m => Opcode -> m ()
+emitAccum opc = emitInstruction (Instruction opc Accumulator)
 
-emitBranch :: ToAddr a => Opcode -> a -> ASM ()
+emitBranch :: (MonadASM m, ToAddr a) => Opcode -> a -> m ()
 emitBranch opc target = do
     pc <- currentPC
     let diff = fromIntegral (toAddr target) - fromIntegral pc - 2 :: Int
@@ -191,7 +191,7 @@ emitBranch opc target = do
                       ++ " (PC=$" ++ showHex16 pc
                       ++ ", target=$" ++ showHex16 (toAddr target) ++ ")"
              | otherwise = fromIntegral diff
-    emit (encode (Instruction opc (Relative byte)))
+    emitInstruction (Instruction opc (Relative byte))
   where
     showHex16 :: Word16 -> String
     showHex16 w = let s = showHex w "" in replicate (4 - length s) '0' ++ s
@@ -200,103 +200,103 @@ emitBranch opc target = do
 -- Operand instructions
 -- ---------------------------------------------------------------------------
 
-lda :: Operand op => op -> ASM ()
+lda :: (MonadASM m, Operand op) => op -> m ()
 lda = emitOp LDA
 
-ldx :: Operand op => op -> ASM ()
+ldx :: (MonadASM m, Operand op) => op -> m ()
 ldx = emitOp LDX
 
-ldy :: Operand op => op -> ASM ()
+ldy :: (MonadASM m, Operand op) => op -> m ()
 ldy = emitOp LDY
 
-sta :: Operand op => op -> ASM ()
+sta :: (MonadASM m, Operand op) => op -> m ()
 sta = emitOp STA
 
-stx :: Operand op => op -> ASM ()
+stx :: (MonadASM m, Operand op) => op -> m ()
 stx = emitOp STX
 
-sty :: Operand op => op -> ASM ()
+sty :: (MonadASM m, Operand op) => op -> m ()
 sty = emitOp STY
 
-adc :: Operand op => op -> ASM ()
+adc :: (MonadASM m, Operand op) => op -> m ()
 adc = emitOp ADC
 
-sbc :: Operand op => op -> ASM ()
+sbc :: (MonadASM m, Operand op) => op -> m ()
 sbc = emitOp SBC
 
-and_ :: Operand op => op -> ASM ()
+and_ :: (MonadASM m, Operand op) => op -> m ()
 and_ = emitOp AND
 
-ora :: Operand op => op -> ASM ()
+ora :: (MonadASM m, Operand op) => op -> m ()
 ora = emitOp ORA
 
-eor :: Operand op => op -> ASM ()
+eor :: (MonadASM m, Operand op) => op -> m ()
 eor = emitOp EOR
 
-cmp :: Operand op => op -> ASM ()
+cmp :: (MonadASM m, Operand op) => op -> m ()
 cmp = emitOp CMP
 
-cpx :: Operand op => op -> ASM ()
+cpx :: (MonadASM m, Operand op) => op -> m ()
 cpx = emitOp CPX
 
-cpy :: Operand op => op -> ASM ()
+cpy :: (MonadASM m, Operand op) => op -> m ()
 cpy = emitOp CPY
 
-asl :: Operand op => op -> ASM ()
+asl :: (MonadASM m, Operand op) => op -> m ()
 asl = emitOp ASL
 
-lsr :: Operand op => op -> ASM ()
+lsr :: (MonadASM m, Operand op) => op -> m ()
 lsr = emitOp LSR
 
-rol :: Operand op => op -> ASM ()
+rol :: (MonadASM m, Operand op) => op -> m ()
 rol = emitOp ROL
 
-ror :: Operand op => op -> ASM ()
+ror :: (MonadASM m, Operand op) => op -> m ()
 ror = emitOp ROR
 
-inc :: Operand op => op -> ASM ()
+inc :: (MonadASM m, Operand op) => op -> m ()
 inc = emitOp INC
 
-dec :: Operand op => op -> ASM ()
+dec :: (MonadASM m, Operand op) => op -> m ()
 dec = emitOp DEC
 
-bit :: Operand op => op -> ASM ()
+bit :: (MonadASM m, Operand op) => op -> m ()
 bit = emitOp BIT
 
 -- ---------------------------------------------------------------------------
 -- Implied instructions
 -- ---------------------------------------------------------------------------
 
-brk, clc, cld, cli, clv :: ASM ()
+brk, clc, cld, cli, clv :: MonadASM m => m ()
 brk = emitImplied BRK
 clc = emitImplied CLC
 cld = emitImplied CLD
 cli = emitImplied CLI
 clv = emitImplied CLV
 
-dex, dey, inx, iny, nop :: ASM ()
+dex, dey, inx, iny, nop :: MonadASM m => m ()
 dex = emitImplied DEX
 dey = emitImplied DEY
 inx = emitImplied INX
 iny = emitImplied INY
 nop = emitImplied NOP
 
-pha, php, pla, plp :: ASM ()
+pha, php, pla, plp :: MonadASM m => m ()
 pha = emitImplied PHA
 php = emitImplied PHP
 pla = emitImplied PLA
 plp = emitImplied PLP
 
-rti, rts :: ASM ()
+rti, rts :: MonadASM m => m ()
 rti = emitImplied RTI
 rts = emitImplied RTS
 
-sec, sed, sei :: ASM ()
+sec, sed, sei :: MonadASM m => m ()
 sec = emitImplied SEC
 sed = emitImplied SED
 sei = emitImplied SEI
 
-tax, tay, tsx, txa, txs, tya :: ASM ()
+tax, tay, tsx, txa, txs, tya :: MonadASM m => m ()
 tax = emitImplied TAX
 tay = emitImplied TAY
 tsx = emitImplied TSX
@@ -308,7 +308,7 @@ tya = emitImplied TYA
 -- Accumulator instructions
 -- ---------------------------------------------------------------------------
 
-asl_a, lsr_a, rol_a, ror_a :: ASM ()
+asl_a, lsr_a, rol_a, ror_a :: MonadASM m => m ()
 asl_a = emitAccum ASL
 lsr_a = emitAccum LSR
 rol_a = emitAccum ROL
@@ -318,7 +318,7 @@ ror_a = emitAccum ROR
 -- Branch instructions
 -- ---------------------------------------------------------------------------
 
-bcc, bcs, beq, bmi, bne, bpl, bvc, bvs :: ToAddr a => a -> ASM ()
+bcc, bcs, beq, bmi, bne, bpl, bvc, bvs :: (MonadASM m, ToAddr a) => a -> m ()
 bcc = emitBranch BCC
 bcs = emitBranch BCS
 beq = emitBranch BEQ
@@ -332,14 +332,14 @@ bvs = emitBranch BVS
 -- Jump instructions
 -- ---------------------------------------------------------------------------
 
-jmp :: ToAddr a => a -> ASM ()
-jmp target = emit (encode (Instruction JMP (Absolute (toAddr target))))
+jmp :: (MonadASM m, ToAddr a) => a -> m ()
+jmp target = emitInstruction (Instruction JMP (Absolute (toAddr target)))
 
-jmp_ind :: ToAddr a => a -> ASM ()
-jmp_ind target = emit (encode (Instruction JMP (Indirect (toAddr target))))
+jmp_ind :: (MonadASM m, ToAddr a) => a -> m ()
+jmp_ind target = emitInstruction (Instruction JMP (Indirect (toAddr target)))
 
-jmpInd :: ToAddr a => a -> ASM ()
+jmpInd :: (MonadASM m, ToAddr a) => a -> m ()
 jmpInd = jmp_ind
 
-jsr :: ToAddr a => a -> ASM ()
-jsr target = emit (encode (Instruction JSR (Absolute (toAddr target))))
+jsr :: (MonadASM m, ToAddr a) => a -> m ()
+jsr target = emitInstruction (Instruction JSR (Absolute (toAddr target)))

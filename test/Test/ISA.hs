@@ -5,7 +5,7 @@ import Data.List (nub)
 import Data.Word (Word8, Word16)
 import Test.QuickCheck hiding ((.&.))
 
-import Asm.Monad (emit, lo, hi)
+import Asm.Monad (MonadASM(..), lo, hi)
 import ISA.Mos6502 (Opcode(..), Instruction(..), encode, decode, instrSize, baseCycles)
 import Test.Helpers
 
@@ -52,7 +52,7 @@ prop_opcodeTableAllOpcodes =
 
 prop_instrSizeCorrect :: TestInsn -> Bool
 prop_instrSizeCorrect (TestInsn instr) =
-    length (asm (emit (encode instr))) == instrSize instr
+    length (asm (emitBytes (encode instr))) == instrSize instr
 
 prop_instrSizeMatchesEncode :: TestInsn -> Bool
 prop_instrSizeMatchesEncode (TestInsn instr) =
@@ -88,19 +88,19 @@ prop_encodeDecodeRoundtrip (TestInsn instr) =
 prop_programLength :: [TestInsn] -> Property
 prop_programLength insns =
     length insns < 100 ==>
-        let bytes = asm (mapM_ (emit . testInsnBytes) insns)
+        let bytes = asm (mapM_ (emitBytes . testInsnBytes) insns)
         in  length bytes == sum (map (\(TestInsn i) -> instrSize i) insns)
 
 prop_assemblyDeterministic :: [TestInsn] -> Property
 prop_assemblyDeterministic insns =
     length insns < 100 ==>
-        let prog = mapM_ (emit . testInsnBytes) insns
+        let prog = mapM_ (emitBytes . testInsnBytes) insns
         in  asm prog == asm prog
 
 prop_programConcat :: [TestInsn] -> Property
 prop_programConcat insns =
     length insns < 100 ==>
-        asm (mapM_ (emit . testInsnBytes) insns) == concatMap testInsnBytes insns
+        asm (mapM_ (emitBytes . testInsnBytes) insns) == concatMap testInsnBytes insns
 
 -- ---------------------------------------------------------------------------
 -- baseCycles / decode coverage (3 props)
