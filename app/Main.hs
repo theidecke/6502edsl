@@ -10,7 +10,8 @@ import Data.Bits (shiftL, complement, testBit, (.|.))
 import Data.Word (Word8, Word16)
 import Numeric (showFFloat)
 
-import Asm.Monad (ASM, Label, TargetConfig(..), ToAddr(..), assembleWithLabels, label, lo, hi)
+import Asm.Monad (MonadASM, MonadZPAlloc, Label, TargetConfig(..), ToAddr(..), assembleWithLabels, label, lo, hi)
+import Backend.ACME (exportAcmeWith)
 import Asm.Mos6502
 import Asm.Mos6502.Control (if_ne, if_cs, when_eq, when_ne, for_x, for_y)
 import Asm.Mos6502.Debug (annotate, fitsIn)
@@ -136,35 +137,35 @@ dtShift = 6
 -- =========================================================================
 
 -- | Load FAC1 from memory: +mem_to_fac1
-memToFac1 :: Word16 -> ASM ()
+memToFac1 :: MonadASM m => Word16 -> m ()
 memToFac1 name = do
     lda # lo name
     ldy # hi name
     jsr romMOVFM
 
 -- | Store FAC1 to memory: +movmf / +fac1_to_mem
-storeFac :: Word16 -> ASM ()
+storeFac :: MonadASM m => Word16 -> m ()
 storeFac name = do
     ldx # lo name
     ldy # hi name
     jsr romMOVMF
 
 -- | FAC1 = FAC1 + Mem: +fadd
-fpAdd :: Word16 -> ASM ()
+fpAdd :: MonadASM m => Word16 -> m ()
 fpAdd other = do
     lda # lo other
     ldy # hi other
     jsr romFADD
 
 -- | FAC1 = Mem - FAC1: +fsub
-fpSub :: Word16 -> ASM ()
+fpSub :: MonadASM m => Word16 -> m ()
 fpSub other = do
     lda # lo other
     ldy # hi other
     jsr romFSUB
 
 -- | FAC1 = Mem / FAC1: +fdiv
-fpDiv :: Word16 -> ASM ()
+fpDiv :: MonadASM m => Word16 -> m ()
 fpDiv other = do
     lda # lo other
     ldy # hi other
@@ -172,7 +173,7 @@ fpDiv other = do
 
 -- | Multiply number from RAM * FAC1, choosing fast_mult or ROM FMULT
 -- based on USE_FAST_MULT flag. Takes fast_mult label as parameter.
-fpMul :: Word16 -> Label -> ASM ()
+fpMul :: MonadASM m => Word16 -> Label -> m ()
 fpMul other fastMultLbl = mdo
     lda # lo other
     ldy # hi other
@@ -190,7 +191,7 @@ fpMul other fastMultLbl = mdo
     pure ()
 
 -- | Initialize float at addr to 16-bit int value: +set_int_param
-setIntParam :: Word16 -> Word8 -> ASM ()
+setIntParam :: MonadASM m => Word16 -> Word8 -> m ()
 setIntParam name value = do
     ldy # value
     lda # 0
@@ -200,14 +201,14 @@ setIntParam name value = do
     jsr romMOVMF
 
 -- | Convert FAC1 to 16-bit signed int and store: +fac1_to_int16
-fac1ToInt16 :: Word16 -> ASM ()
+fac1ToInt16 :: MonadASM m => Word16 -> m ()
 fac1ToInt16 location = do
     jsr romFACINX
     sty location
     sta (location + 1)
 
 -- | Calculate f1 = f1 / f2: +div2
-div2 :: Word16 -> Word16 -> ASM ()
+div2 :: MonadASM m => Word16 -> Word16 -> m ()
 div2 f1 f2 = do
     lda # lo f2
     ldy # hi f2
@@ -220,7 +221,7 @@ div2 f1 f2 = do
     jsr romMOVMF
 
 -- | Multiply dt to FAC1 by shifting the exponent: +multiply_dt_to_fac1
-multiplyDtToFac1 :: ASM ()
+multiplyDtToFac1 :: MonadASM m => m ()
 multiplyDtToFac1 = do
     sec
     lda facExp
@@ -229,7 +230,7 @@ multiplyDtToFac1 = do
     clc
 
 -- | Save int(grad/8) to target: +save_int_gradient_to
-saveIntGradientTo :: Word16 -> ASM ()
+saveIntGradientTo :: MonadASM m => Word16 -> m ()
 saveIntGradientTo target = do
     -- save int(grad/8) to target
     jsr romMOVFA
@@ -241,19 +242,19 @@ saveIntGradientTo target = do
     jsr romMOVEF
 
 -- | 16-bit left shift: +lshift_16bit
-lshift16 :: (Operand a, Operand b) => a -> b -> ASM ()
+lshift16 :: (MonadASM m, Operand a, Operand b) => a -> b -> m ()
 lshift16 hb lb = do
     asl lb
     rol hb
 
 -- | 16-bit right shift: +rshift_16bit
-rshift16 :: (Operand a, Operand b) => a -> b -> ASM ()
+rshift16 :: (MonadASM m, Operand a, Operand b) => a -> b -> m ()
 rshift16 hb lb = do
     lsr hb
     ror lb
 
 -- | Debug blit: +dbgblt
-dbgblt :: Word16 -> Word8 -> ASM ()
+dbgblt :: MonadASM m => Word16 -> Word8 -> m ()
 dbgblt addr val = do
     -- usage:
     -- dbgblt 0x200 0xFF   draws a straight line in the first row
@@ -261,13 +262,13 @@ dbgblt addr val = do
     sta (addr + 0x2000)
 
 -- | Set key press timer for debouncing: +set_key_press_timer
-setKeyPressTimer :: Var8 -> ASM ()
+setKeyPressTimer :: MonadASM m => Var8 -> m ()
 setKeyPressTimer kpt = do
     lda # 10  -- number of ISR invocations to wait between key press checks
     sta kpt
 
 -- | Drawloop macro (plot y = FP_A * x + FP_B): +drawloop
-drawloop :: Label -> Label -> Ptr -> ASM ()
+drawloop :: MonadASM m => Label -> Label -> Ptr -> m ()
 drawloop fastMultLbl blitXyLbl zfb = do
     -- plot y = FP_A / FP_TEMP * x + FP_C / FP_TEMP
     setIntParam fpXcur 0
@@ -328,7 +329,7 @@ padR n s = s ++ replicate (max 0 (n - length s)) ' '
 -- Program
 -- =========================================================================
 
-program :: ASM Word16
+program :: (MonadASM m, MonadZPAlloc m) => m Word16
 program = mdo
 
     -- =====================================================================
@@ -1975,6 +1976,8 @@ main = do
     putStrLn $ "Wrote attraktor.d64 (" ++ show (length d64) ++ " bytes)"
     writeFile "attraktor.vs" (exportViceLabels annotations)
     putStrLn $ "Wrote attraktor.vs (" ++ show (Map.size annotations) ++ " labels)"
+    writeFile "attraktor.asm" (exportAcmeWith cfg program)
+    putStrLn "Wrote attraktor.asm"
     -- In VICE: attach disk image, then type  LOAD"*",8,1  followed by  RUN
 
     -- Execution profile: run the first 1M cycles through the emulator
