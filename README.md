@@ -273,6 +273,19 @@ Emits: `A9 05 C9 05 D0 05 A9 01 4C 0D C0 A9 02 60` (at origin `$C000`)
 
 Available variants: `if_eq`, `if_ne`, `if_cs`, `if_cc`, `if_pl`, `if_mi`, and the generalized `if_` which takes a branch function directly.
 
+**One-armed when (no else branch):**
+
+```haskell
+lda # 0x05
+cmp # 0x05
+when_eq (lda # 0x01)              -- body runs only when Z=1
+rts
+```
+
+Emits: `A9 05 C9 05 D0 02 A9 01 60` — no JMP, tighter than `if_eq` with an empty else.
+
+Available variants: `when_eq`, `when_ne`, `when_cs`, `when_cc`, `when_pl`, `when_mi`, and the generalized `when_`.
+
 **Counted loops:**
 
 ```haskell
@@ -561,7 +574,7 @@ src/
     Mos6502.hs                 -- Operand typeclass, addressing mode sugar, typed memory
                                --   locations (Var8/Var16/Ptr, Mem8/Mem16/MemPtr), Loc16 typeclass
     Mos6502/
-      Control.hs               -- Structured control flow (if_eq, while_, for_x, loop_)
+      Control.hs               -- Structured control flow (if_eq, when_eq, while_, for_x, loop_)
       Ops16.hs                 -- 16-bit arithmetic via Loc16 (add16, inc16, lshift16, etc.)
       Memory.hs                -- Alignment and page assertions
       Debug.hs                 -- Size assertions, named labels

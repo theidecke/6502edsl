@@ -4,7 +4,7 @@ import Data.Word (Word8)
 
 import Asm.Monad (ASM)
 import Asm.Mos6502
-import Asm.Mos6502.Control (if_, if_eq, if_ne, if_cs, if_cc, if_pl, if_mi, while_, for_x, for_y, loop_)
+import Asm.Mos6502.Control (if_, if_eq, if_ne, if_cs, if_cc, if_pl, if_mi, when_, when_eq, when_ne, when_cs, when_cc, when_pl, when_mi, while_, for_x, for_y, loop_)
 import Asm.Mos6502.Ops16 (add16, sub16, inc16, dec16, cmp16, mov16, load16, lshift16, rshift16)
 import Test.Helpers
 
@@ -79,6 +79,44 @@ prop_whileMultiByteBody =
        , 0xE6, 0x80, 0xE6, 0x81
        , 0x4C, 0x00, 0x00
        ]
+
+-- ---------------------------------------------------------------------------
+-- One-armed when (9 props)
+-- ---------------------------------------------------------------------------
+
+whenBytes :: (ASM () -> ASM ()) -> [Word8]
+whenBytes f = asm (f nop)
+
+prop_whenEqUsesBne :: Bool
+prop_whenEqUsesBne = whenBytes when_eq == [0xD0, 0x01, 0xEA]
+
+prop_whenNeUsesBeq :: Bool
+prop_whenNeUsesBeq = whenBytes when_ne == [0xF0, 0x01, 0xEA]
+
+prop_whenCsUsesBcc :: Bool
+prop_whenCsUsesBcc = whenBytes when_cs == [0x90, 0x01, 0xEA]
+
+prop_whenCcUsesBcs :: Bool
+prop_whenCcUsesBcs = whenBytes when_cc == [0xB0, 0x01, 0xEA]
+
+prop_whenPlUsesBmi :: Bool
+prop_whenPlUsesBmi = whenBytes when_pl == [0x30, 0x01, 0xEA]
+
+prop_whenMiUsesBpl :: Bool
+prop_whenMiUsesBpl = whenBytes when_mi == [0x10, 0x01, 0xEA]
+
+prop_whenGeneralized :: Bool
+prop_whenGeneralized =
+    asm (when_ bvc nop) == [0x50, 0x01, 0xEA]
+
+prop_whenMultiByteBody :: Bool
+prop_whenMultiByteBody =
+    asm (when_eq (nop >> nop >> nop)) == [0xD0, 0x03, 0xEA, 0xEA, 0xEA]
+
+prop_whenEqMultiByteBody :: Bool
+prop_whenEqMultiByteBody =
+    asm (when_eq (lda # 0x01 >> sta (0x80 :: Word8)))
+    == [0xD0, 0x04, 0xA9, 0x01, 0x85, 0x80]
 
 -- ---------------------------------------------------------------------------
 -- 16-bit operations (7 props)
@@ -206,6 +244,17 @@ tests =
     , checkOnce "while_ bytes"              prop_whileBytes
     , checkOnce "if_eq multi-byte bodies"   prop_ifEqMultiByteBodies
     , checkOnce "while_ multi-byte body"    prop_whileMultiByteBody
+
+    , section "One-armed when"
+    , checkOnce "when_eq uses BNE"            prop_whenEqUsesBne
+    , checkOnce "when_ne uses BEQ"            prop_whenNeUsesBeq
+    , checkOnce "when_cs uses BCC"            prop_whenCsUsesBcc
+    , checkOnce "when_cc uses BCS"            prop_whenCcUsesBcs
+    , checkOnce "when_pl uses BMI"            prop_whenPlUsesBmi
+    , checkOnce "when_mi uses BPL"            prop_whenMiUsesBpl
+    , checkOnce "when_ generalized (bvc)"     prop_whenGeneralized
+    , checkOnce "when_ multi-byte body"       prop_whenMultiByteBody
+    , checkOnce "when_eq multi-byte body"     prop_whenEqMultiByteBody
 
     , section "16-bit operations"
     , checkOnce "load16 bytes"              prop_load16Bytes

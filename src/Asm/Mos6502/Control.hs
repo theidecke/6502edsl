@@ -1,8 +1,10 @@
 {-# LANGUAGE RecursiveDo #-}
 
 module Asm.Mos6502.Control
-    ( -- * Structured if
+    ( -- * Two-armed if
       if_, if_eq, if_ne, if_cs, if_cc, if_pl, if_mi
+      -- * One-armed when (no else branch, tighter code)
+    , when_, when_eq, when_ne, when_cs, when_cc, when_pl, when_mi
       -- * Loops
     , while_, for_x, for_y, loop_
     ) where
@@ -49,6 +51,42 @@ if_pl = if_ bmi
 -- | If N=1 (minus), run @then@; otherwise run @else@.
 if_mi :: MonadASM m => m () -> m () -> m ()
 if_mi = if_ bpl
+
+-- | One-armed if. The first argument is the branch that skips past the body,
+-- i.e. the /negation/ of the desired condition.
+--
+-- Generates @branch end; body; end:@ — no JMP, tighter than 'if_' with an
+-- empty else.
+when_ :: MonadASM m => (Label -> m ()) -> m () -> m ()
+when_ skipBranch body = mdo
+    skipBranch end
+    body
+    end <- label
+    pure ()
+
+-- | Execute body when Z=1 (equal / zero).
+when_eq :: MonadASM m => m () -> m ()
+when_eq = when_ bne
+
+-- | Execute body when Z=0 (not equal / non-zero).
+when_ne :: MonadASM m => m () -> m ()
+when_ne = when_ beq
+
+-- | Execute body when C=1 (carry set / unsigned >=).
+when_cs :: MonadASM m => m () -> m ()
+when_cs = when_ bcc
+
+-- | Execute body when C=0 (carry clear / unsigned <).
+when_cc :: MonadASM m => m () -> m ()
+when_cc = when_ bcs
+
+-- | Execute body when N=0 (plus / positive).
+when_pl :: MonadASM m => m () -> m ()
+when_pl = when_ bmi
+
+-- | Execute body when N=1 (minus / negative).
+when_mi :: MonadASM m => m () -> m ()
+when_mi = when_ bpl
 
 -- | Parameterized while loop. @while_ beq testBlock bodyBlock@ means
 -- "while test result is non-zero, execute body."
