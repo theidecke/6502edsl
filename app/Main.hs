@@ -5,15 +5,20 @@ module Main where
 
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as Map
+import Control.Monad (forM_)
+import Data.Bits (shiftL, complement, testBit, (.|.))
 import Data.Word (Word8, Word16)
+import Numeric (showFFloat)
 
 import Asm.Monad (ASM, Label, TargetConfig(..), ToAddr(..), assembleWithLabels, label, lo, hi)
 import Asm.Mos6502
-import Asm.Mos6502.Debug (annotate)
+import Asm.Mos6502.Control (if_ne, if_cs, when_eq, when_ne, for_x, for_y)
+import Asm.Mos6502.Debug (annotate, fitsIn)
+import Asm.Mos6502.Memory (alignPage, samePage)
 import Backend.C64.D64 (toD64)
 import Backend.C64.PRG (toPRG)
 import Backend.C64.ViceLabels (exportViceLabels)
-import Emu.CPU (initCPU, view, set, regPC)
+import Emu.CPU (CPUState, initCPU, view, set, regPC, memAt, cycles)
 import Emu.Trace (loadProgram, traceForCycles, pcCoverage, formatProfile, formatState)
 import Target.C64 (C64Subsystems(..), c64TargetConfig, defaultC64Subsystems, loadC64Roms)
 import Target.C64.Data (byte)
@@ -298,11 +303,32 @@ drawloop fastMultLbl blitXyLbl zfb = do
     cmp # 100
     bcc loopStart
 
+-- | Convert a 5-byte CBM float (exponent + 4 mantissa bytes) to a Haskell Double.
+cbmFloatToDouble :: Word8 -> Word8 -> Word8 -> Word8 -> Word8 -> Double
+cbmFloatToDouble 0 _ _ _ _ = 0.0
+cbmFloatToDouble e m0 m1 m2 m3 =
+    let sign = if testBit m0 7 then negate else id
+        mantissa = fromIntegral (m0 .|. 0x80) `shiftL` 24
+               .|. fromIntegral m1 `shiftL` 16
+               .|. fromIntegral m2 `shiftL` 8
+               .|. fromIntegral m3 :: Integer
+    in  sign $ encodeFloat mantissa (fromIntegral e - 160)
+
+-- | Read a 5-byte CBM float from emulator memory at a given address.
+readCBMFloat :: Word16 -> CPUState -> Double
+readCBMFloat addr s = cbmFloatToDouble
+    (rd addr) (rd (addr+1)) (rd (addr+2)) (rd (addr+3)) (rd (addr+4))
+  where rd a = view (memAt a) s
+
+-- | Right-pad a string to a given width.
+padR :: Int -> String -> String
+padR n s = s ++ replicate (max 0 (n - length s)) ' '
+
 -- =========================================================================
 -- Program
 -- =========================================================================
 
-program :: ASM ()
+program :: ASM Word16
 program = mdo
 
     -- =====================================================================
@@ -327,77 +353,76 @@ program = mdo
     -- BASIC SYS stub: SYS 2061
     -- =====================================================================
     -- *=$0801
-    byte [0x0B, 0x08, 0x01, 0x00, 0x9E, 0x32, 0x30, 0x36, 0x31, 0x00, 0x00, 0x00]
+    annotate "basicSysStub" $
+        byte [0x0B, 0x08, 0x01, 0x00, 0x9E, 0x32, 0x30, 0x36, 0x31, 0x00, 0x00, 0x00]
 
     -- =====================================================================
     -- Start: * = $080d (=2061)
     -- =====================================================================
 
-    -- SetBorderColor 0
-    lda # 0
-    sta vicBorderColor
-    sta vicBackgroundColor0   -- infill color to black as well
+    annotate "initColors" $ do
+        -- SetBorderColor 0
+        lda # 0
+        sta vicBorderColor
+        sta vicBackgroundColor0   -- infill color to black as well
 
-    lda # 0x02
-    sta screenRAM             -- draw 'B'
+        lda # 0x02
+        sta screenRAM             -- draw 'B'
 
-    sei                       -- disable interrupts
+    annotate "initInterrupts" $ do
+        sei                       -- disable interrupts
 
-    -- setup sound
-    jsr initSid
+        -- setup sound
+        jsr initSid
 
-    lda # lo (toAddr vicRstIrq)
-    sta sysIRQVec
-    lda # hi (toAddr vicRstIrq)
-    sta (sysIRQVec + 1)      -- fill interrupt table entry for VIC-II RST interrupt
-    -- VIC-II can generate interrupts, these have to be enabled
-    -- and, once on occurs, a the bit in the interrupt latch
-    -- register ($d019) needs to be cleared.
-    --
-    -- $d01a is the interrupt enable register - a bit in the
-    -- first 4 bits will enable one of the 4 interrupts.
-    --
-    -- here we will enable the 'reached certain raster line' (RST)
-    -- interrupt. The raster line is stored in $d012 and $d011.
-    asl vicInterruptStatus
-    lda # 0x7B
-    sta cia1InterruptControl
-    lda # 0x81
-    sta vicInterruptEnable    -- write to VIC-II interrupt register
-    lda # 0x1B
-    sta vicControlY
-    lda # 0x80
-    sta vicRasterLine
-    cli                       -- enable interrupts
+        lda # lo (toAddr vicRstIrq)
+        sta sysIRQVec
+        lda # hi (toAddr vicRstIrq)
+        sta (sysIRQVec + 1)      -- fill interrupt table entry for VIC-II RST interrupt
+        -- VIC-II can generate interrupts, these have to be enabled
+        -- and, once on occurs, a the bit in the interrupt latch
+        -- register ($d019) needs to be cleared.
+        --
+        -- $d01a is the interrupt enable register - a bit in the
+        -- first 4 bits will enable one of the 4 interrupts.
+        --
+        -- here we will enable the 'reached certain raster line' (RST)
+        -- interrupt. The raster line is stored in $d012 and $d011.
+        asl vicInterruptStatus
+        lda # 0x7B
+        sta cia1InterruptControl
+        lda # 0x81
+        sta vicInterruptEnable    -- write to VIC-II interrupt register
+        lda # 0x1B
+        sta vicControlY
+        lda # 0x80
+        sta vicRasterLine
+        cli                       -- enable interrupts
 
+    annotate "initBitmapMode" $ do
+        -- enable 'high-res' bitmap mode; this gives us 320x200 pixel (=64000)
+        -- in graphics memory but only 40x25 (=1000) bytes for color.
+        lda vicControlY           -- set BMM=1
+        ora # 0b00100000
+        sta vicControlY
+        lda vicControlX           -- unset MCM
+        and_ # 0b11101111
+        sta vicControlX
 
-    -- enable 'high-res' bitmap mode; this gives us 320x200 pixel (=64000)
-    -- in graphics memory but only 40x25 (=1000) bytes for color.
-    lda vicControlY           -- set BMM=1
-    ora # 0b00100000
-    sta vicControlY
-    lda vicControlX           -- unset MCM
-    and_ # 0b11101111
-    sta vicControlX
-
-    lda vicMemorySetup
-    ora # 0b00001000
-    sta vicMemorySetup        -- move graphics to $2000 instead of $1000
-
+        lda vicMemorySetup
+        ora # 0b00001000
+        sta vicMemorySetup        -- move graphics to $2000 instead of $1000
 
     -- colors are defined for 8x8 pixels at once, upper nibble for 'on' pixels.
     -- for simplicity we'll fill all 40x25 byte with white for on-pixels and
     -- black for off-pixels.
-    ldx # 0x00
-    lda # 0b01010000
-    colorfillLoop <- label
-    sta (screenRAM, X)
-    sta (screenRAM + 0x0100, X)
-    sta (screenRAM + 0x0200, X)
-    sta (screenRAM + 0x0300, X)
-    dex
-    bne colorfillLoop
-
+    annotate "colorFill" $ do
+        lda # 0b01010000
+        for_x 0 $ do
+            sta (screenRAM, X)
+            sta (screenRAM + 0x0100, X)
+            sta (screenRAM + 0x0200, X)
+            sta (screenRAM + 0x0300, X)
 
     -- overwrite all pixels with 0 to blank the screen
     --
@@ -409,24 +434,16 @@ program = mdo
     -- we write $2000 (high byte $20 and low byte $00 respectively) to
     -- memory location $00fc and $00fb. Then we can do something like
     -- sta ($fb), y to set ($2000 + y) to the content of register A.
-    ldx # 32
-    ldy # 0x00
-
-    lda # 0x00
-    sta zpFB
-    lda # 0x20
-    sta (zpFB + 1)
-
-    lda # 0x00
-
-    clearScrLoop <- label
-    sta (zpFB ! Y)
-    dey
-    bne clearScrLoop
-    inc (zpFB + 1)
-    ldy # 0x00
-    dex
-    bne clearScrLoop
+    annotate "clearScreen" $ do
+        lda # 0x00
+        sta zpFB
+        lda # 0x20
+        sta (zpFB + 1)
+        lda # 0x00
+        for_x 32 $ do
+            for_y 0 $ do
+                sta (zpFB ! Y)
+            inc (zpFB + 1)
 
 
     -- 320x200 resolution, 40x25 bytes, therefore 256/40=6.4 rows per page
@@ -443,224 +460,160 @@ program = mdo
     -- when base addr. = $2000, then 0b0 is bit 0 at $2000, 0b1 is bit 1 at $2000.
 
     -- =====================================================================
-    -- OR mask LUT init
+    -- OR/AND mask LUT init (generated from Haskell loop)
     -- =====================================================================
-    lda # 0b00000001
-    sta screenMaskOr0
-    lda # 0b00000010
-    sta (screenMaskOr0 + 1)
-    lda # 0b00000100
-    sta (screenMaskOr0 + 2)
-    lda # 0b00001000
-    sta (screenMaskOr0 + 3)
-    lda # 0b00010000
-    sta (screenMaskOr0 + 4)
-    lda # 0b00100000
-    sta (screenMaskOr0 + 5)
-    lda # 0b01000000
-    sta (screenMaskOr0 + 6)
-    lda # 0b10000000
-    sta (screenMaskOr0 + 7)
-
-    -- AND mask LUT init
-    lda # 0b11111110
-    sta screenMaskAnd0
-    lda # 0b11111101
-    sta (screenMaskAnd0 + 1)
-    lda # 0b11111011
-    sta (screenMaskAnd0 + 2)
-    lda # 0b11110111
-    sta (screenMaskAnd0 + 3)
-    lda # 0b11101111
-    sta (screenMaskAnd0 + 4)
-    lda # 0b11011111
-    sta (screenMaskAnd0 + 5)
-    lda # 0b10111111
-    sta (screenMaskAnd0 + 6)
-    lda # 0b01111111
-    sta (screenMaskAnd0 + 7)
+    annotate "initMaskLuts" $
+        forM_ [0..7] $ \i -> do
+            let orMask = 1 `shiftL` i :: Word8
+            lda # orMask
+            sta (screenMaskOr0 + fromIntegral i)
+            lda # complement orMask
+            sta (screenMaskAnd0 + fromIntegral i)
 
 
     jsr rngSeed
 
-
-    lda # 0
-    sta keyPressTimer
-    sta sndTurnSoundOn
-
-
+    annotate "initState" $ do
+        lda # 0
+        sta keyPressTimer
+        sta sndTurnSoundOn
 
     -- =====================================================================
     -- Float initialization
     -- =====================================================================
+    annotate "initFloats" $ mdo
+        setIntParam fpXcur 2
+        setIntParam fpYcur 1
+        setIntParam fpZcur 1
 
-    -- X is 16 bit (FC FB)
-    -- Y is  8 bit (Y)
-    -- lda # 0x00
-    -- sta $FC
-    -- lda # 0x02
-    -- sta $FB
+        setIntParam fpA 10
+        setIntParam fpB 28
+        setIntParam fpC 8
 
-    -- ldy # 0x00
-    -- jsr blitXy
+        setIntParam fpScaleY 25
+        setIntParam fpOffsetX 160
+        setIntParam fp10 10
 
+        -- initialize FP_C = 8/3
+        setIntParam fpTemp 3
+        -- when doing fast mult we're going to sink into the first attractor
+        -- due to error accumulation, so we need to shift C just a tiny bit
+        -- so that we don't :)
+        lda useFastMult
+        beq skipFastMultAdjust
+        setIntParam fpTemp2 3
+        div2 fpTemp2 fp10
+        memToFac1 fpTemp
+        fpAdd fpTemp2
+        storeFac fpTemp
+        skipFastMultAdjust <- label
+        div2 fpC fpTemp
 
-    -- lda # 0x00
-    -- sta $FC
-    -- lda # 0x04
-    -- sta $FB
-    -- ldy # 0
-    -- jsr blitXy
+        lda # 0
+        sta useFastMult
 
-
-    setIntParam fpXcur 2
-    setIntParam fpYcur 1
-    setIntParam fpZcur 1
-
-    setIntParam fpA 10
-    setIntParam fpB 28
-    setIntParam fpC 8
-
-    setIntParam fpScaleY 25
-    setIntParam fpOffsetX 160
-    setIntParam fp10 10
-
-    -- initialize FP_C = 8/3
-    setIntParam fpTemp 3
-    -- when doing fast mult we're going to sink into the first attractor
-    -- due to error accumulation, so we need to shift C just a tiny bit
-    -- so that we don't :)
-    lda useFastMult
-    beq skipFastMultAdjust
-    setIntParam fpTemp2 3
-    div2 fpTemp2 fp10
-    memToFac1 fpTemp
-    fpAdd fpTemp2
-    storeFac fpTemp
-    skipFastMultAdjust <- label
-    div2 fpC fpTemp
-
-
-
-    -- testing operation order of FSUB
-    --
-    -- setIntParam fpTemp 100
-    -- memToFac1 fpA
-    -- lda # lo fpTemp
-    -- ldy # hi fpTemp
-    -- jsr romFSUB
-    -- storeFac fpTemp  -- expect 90 in FP_TEMP
-
-
-
-    lda # 0
-    sta useFastMult
-
-    -- Comment the following jump to reach the fast mult test drawing code.
-    jmp mainLoop
+        -- Comment the following jump to reach the fast mult test drawing code.
+        jmp mainLoop
 
 
 
     -- =====================================================================
     -- TEST CODE
     -- =====================================================================
+    annotate "fastMultTests" $ do
+        -- testing fast float multiplication
+        --
+        -- FP_A = 3.1415
+        -- ['0x82', '0x49', '0xe', '0x56', '0x0']
+        lda # 0x82
+        sta fpA
+        lda # 0x49
+        sta (fpA + 1)
+        lda # 0x0E
+        sta (fpA + 2)
+        lda # 0x56
+        sta (fpA + 3)
+        lda # 0x00
+        sta (fpA + 4)
+        memToFac1 fpA
+        -- FP_B = -10
+        -- ['0x84', '0xa0', '0x0', '0x0', '0x0']
+        lda # 0x84
+        sta fpB
+        lda # 0xA0
+        sta (fpB + 1)
+        lda # 0x00
+        sta (fpB + 2)
+        lda # 0x00
+        sta (fpB + 3)
+        lda # 0x00
+        sta (fpB + 4)
+        fpMul fpB fastMult
+        storeFac fpC
 
-    -- testing fast float multiplication
-    --
-    -- FP_A = 3.1415
-    -- ['0x82', '0x49', '0xe', '0x56', '0x0']
-    lda # 0x82
-    sta fpA
-    lda # 0x49
-    sta (fpA + 1)
-    lda # 0x0E
-    sta (fpA + 2)
-    lda # 0x56
-    sta (fpA + 3)
-    lda # 0x00
-    sta (fpA + 4)
-    memToFac1 fpA
-    -- FP_B = -10
-    -- ['0x84', '0xa0', '0x0', '0x0', '0x0']
-    lda # 0x84
-    sta fpB
-    lda # 0xA0
-    sta (fpB + 1)
-    lda # 0x00
-    sta (fpB + 2)
-    lda # 0x00
-    sta (fpB + 3)
-    lda # 0x00
-    sta (fpB + 4)
-    fpMul fpB fastMult
-    storeFac fpC
+        -- code for multiplying 3.1415 and 100
+        -- inspect $c48a for result
+        -- expected for approx mult: 290.11199951171875
+        lda # 0x82
+        sta (0xC480 :: Word16)
+        lda # 0x49
+        sta (0xC481 :: Word16)
+        lda # 0x0E
+        sta (0xC482 :: Word16)
+        lda # 0x56
+        sta (0xC483 :: Word16)
+        lda # 0x00
+        sta (0xC484 :: Word16)
+        memToFac1 0xC480
+        lda # 0x87
+        sta (0xC485 :: Word16)
+        lda # 0x48
+        sta (0xC486 :: Word16)
+        lda # 0x00
+        sta (0xC487 :: Word16)
+        lda # 0x00
+        sta (0xC488 :: Word16)
+        lda # 0x00
+        sta (0xC489 :: Word16)
+        fpMul 0xC485 fastMult
+        storeFac 0xC48A
 
+        -- code for multiplying 3.1415 and 1000
+        -- inspect $c48a for result
+        -- expected for approx mult: 3120.89599609375
+        lda # 0x82
+        sta (0xC480 :: Word16)
+        lda # 0x49
+        sta (0xC481 :: Word16)
+        lda # 0x0E
+        sta (0xC482 :: Word16)
+        lda # 0x56
+        sta (0xC483 :: Word16)
+        lda # 0x00
+        sta (0xC484 :: Word16)
+        memToFac1 0xC480
+        lda # 0x8A
+        sta (0xC485 :: Word16)
+        lda # 0x7A
+        sta (0xC486 :: Word16)
+        lda # 0x00
+        sta (0xC487 :: Word16)
+        lda # 0x00
+        sta (0xC488 :: Word16)
+        lda # 0x00
+        sta (0xC489 :: Word16)
+        fpMul 0xC485 fastMult
+        storeFac 0xC48A
 
-    -- code for multiplying 3.1415 and 100
-    -- inspect $c48a for result
-    -- expected for approx mult: 290.11199951171875
-    lda # 0x82
-    sta (0xC480 :: Word16)
-    lda # 0x49
-    sta (0xC481 :: Word16)
-    lda # 0x0E
-    sta (0xC482 :: Word16)
-    lda # 0x56
-    sta (0xC483 :: Word16)
-    lda # 0x00
-    sta (0xC484 :: Word16)
-    memToFac1 0xC480
-    lda # 0x87
-    sta (0xC485 :: Word16)
-    lda # 0x48
-    sta (0xC486 :: Word16)
-    lda # 0x00
-    sta (0xC487 :: Word16)
-    lda # 0x00
-    sta (0xC488 :: Word16)
-    lda # 0x00
-    sta (0xC489 :: Word16)
-    fpMul 0xC485 fastMult
-    storeFac 0xC48A
+        -- drawloop test code
+        lda # 0
+        sta useFastMult
+        drawloop fastMult blitXy zpFB
+        lda # 1
+        sta useFastMult
+        drawloop fastMult blitXy zpFB
 
-    -- code for multiplying 3.1415 and 1000
-    -- inspect $c48a for result
-    -- expected for approx mult: 3120.89599609375
-    lda # 0x82
-    sta (0xC480 :: Word16)
-    lda # 0x49
-    sta (0xC481 :: Word16)
-    lda # 0x0E
-    sta (0xC482 :: Word16)
-    lda # 0x56
-    sta (0xC483 :: Word16)
-    lda # 0x00
-    sta (0xC484 :: Word16)
-    memToFac1 0xC480
-    lda # 0x8A
-    sta (0xC485 :: Word16)
-    lda # 0x7A
-    sta (0xC486 :: Word16)
-    lda # 0x00
-    sta (0xC487 :: Word16)
-    lda # 0x00
-    sta (0xC488 :: Word16)
-    lda # 0x00
-    sta (0xC489 :: Word16)
-    fpMul 0xC485 fastMult
-    storeFac 0xC48A
-
-
-    -- drawloop test code
-    lda # 0
-    sta useFastMult
-    drawloop fastMult blitXy zpFB
-    lda # 1
-    sta useFastMult
-    drawloop fastMult blitXy zpFB
-
-    jmp hang
-
+        jmp hang
 
     -- =====================================================================
     -- End of fast mult test drawing code
@@ -672,27 +625,28 @@ program = mdo
     -- Main loop
     -- =====================================================================
     mainLoop <- label
-    annotate "mainLoop" $ do
+    afterXyzStep <- annotate "mainLoop" $ do
         lda # (0x20 - 5)
         sta (0xFA :: Word8)
-    drawLoop <- label
-    jsr xyzStep
-    lda intX
-    sta zpFB
-    lda (intX + 1)
-    sta (zpFB + 1)
-    ldy intY
+        drawLoop <- label
+        jsr xyzStep
+        afterStep <- label
+        lda intX
+        sta zpFB
+        lda (intX + 1)
+        sta (zpFB + 1)
+        ldy intY
 
-    jsr blitXy
+        jsr blitXy
 
-    jsr rngNext
-    jsr clearRngPixel
-    jsr rngNext
-    jsr clearRngPixel
+        jsr rngNext
+        jsr clearRngPixel
+        jsr rngNext
+        jsr clearRngPixel
 
-    dec (0xFA :: Word8)
-    -- bne drawLoop
-    jmp drawLoop
+        dec (0xFA :: Word8)
+        jmp drawLoop
+        pure afterStep
 
 
 
@@ -960,37 +914,33 @@ program = mdo
         sta intM              -- INT_M = A = dy + 2dz
         cmp intXdt
 
-        bcs xIsMaxYIsMin
-        jmp yIsMaxXIsMin
+        annotate "l2Magnitude" $
+            if_cs
+                (do -- x is max, y is min
+                    lda intM
+                    lsr_a
+                    lsr_a             -- scale dy+2dz value by 4 (we do x/4 later)
+                    lsr_a             -- scale INT_M by 2 since it contains the minimum
+                    sta intM
+                    lda intXdt
+                    lsr_a
+                    lsr_a
+                    clc
+                    adc intM          -- INT_M = dx/4 (max) + ((dy + 2dz)/4)/2
+                    sta intM)
+                (do -- y is max, x is min
+                    lda intM
+                    lsr_a
+                    lsr_a             -- INT_M = (dy+2dz)/4 (max)
+                    sta intM
+                    lda intXdt
+                    lsr_a
+                    lsr_a             -- scale dx by 4
+                    lsr_a             -- scale dx by 2 because its the minimum
+                    clc
+                    adc intM
+                    sta intM)
 
-        xIsMaxYIsMin <- label
-        lda intM
-        lsr_a
-        lsr_a                 -- scale dy+2dz value by 4 (we do x/4 later)
-        lsr_a                 -- scale INT_M by 2 since it contains the minimum
-        sta intM
-        lda intXdt
-        lsr_a
-        lsr_a
-        clc
-        adc intM              -- INT_M = dx/4 (max) + ((dy + 2dz)/4)/2
-        sta intM
-        jmp l2Ready
-
-        yIsMaxXIsMin <- label
-        lda intM
-        lsr_a
-        lsr_a                 -- INT_M = (dy+2dz)/4 (max)
-        sta intM
-        lda intXdt
-        lsr_a
-        lsr_a                 -- scale dx by 4
-        lsr_a                 -- scale dx by 2 because its the minimum
-        clc
-        adc intM
-        sta intM
-
-        l2Ready <- label
         rts
 
 
@@ -1046,7 +996,7 @@ program = mdo
     -- blit_xy subroutine
     -- =====================================================================
     blitXy <- label
-    annotate "blitXy" $ do
+    annotate "blitXy" $ fitsIn 160 $ do
         -- parameters: x (16 bit), y (8 bit)
         -- 0 <= x < 320, 0 <= y < 200
         --
@@ -1166,7 +1116,7 @@ program = mdo
     -- clear_rng_pixel subroutine
     -- =====================================================================
     clearRngPixel <- label
-    annotate "clearRngPixel" $ do
+    annotate "clearRngPixel" $ fitsIn 64 $ do
         -- parameters: rngStateLo, rngStateHi as linear screen memory offset
         --
         -- clobbers SCREEN_ADDR global, zpFB and zpFD.
@@ -1368,24 +1318,15 @@ program = mdo
         setIntParam fpYcur 1
         setIntParam fpZcur 1
 
-        ldx # 32
-        ldy # 0x00
-
         lda # 0x00
         sta zpFB
         lda # 0x20
         sta (zpFB + 1)
-
         lda # 0
-
-        resetClearLoop <- label
-        sta (zpFB ! Y)
-        dey
-        bne resetClearLoop
-        inc (zpFB + 1)
-        ldy # 0x00
-        dex
-        bne resetClearLoop
+        for_x 32 $ do
+            for_y 0 $ do
+                sta (zpFB ! Y)
+            inc (zpFB + 1)
 
         rts
 
@@ -1432,53 +1373,34 @@ program = mdo
         -- activate sequence 1 for left
         lda # 0b01111111
         sta cia1DataPortA
-
         lda cia1DataPortB
         and_ # 0b01000000
-        bne hkpQNotPressed
-
-        setKeyPressTimer keyPressTimer
-
-        -- TODO handle q
-        lda # 1
-        sta sndTurnSoundOn
-
-        hkpQNotPressed <- label
+        when_eq $ do
+            setKeyPressTimer keyPressTimer
+            lda # 1
+            sta sndTurnSoundOn
 
         -- 'A' key press handler
         --
         -- activate sequence 2 for left
         lda # 0b11111101
         sta cia1DataPortA
-
         lda cia1DataPortB
         and_ # 0b00000100
-        bne hkpANotPressed
-
-        setKeyPressTimer keyPressTimer
-
-        -- TODO handle a
-        lda # 1
-        sta sndTurnSoundOn
-
-        hkpANotPressed <- label
+        when_eq $ do
+            setKeyPressTimer keyPressTimer
+            lda # 1
+            sta sndTurnSoundOn
 
         -- 'Z' key press handler
-
         lda # 0b11111101
         sta cia1DataPortA
-
         lda cia1DataPortB
         and_ # 0b00010000
-        bne hkpZNotPressed
-
-        setKeyPressTimer keyPressTimer
-
-        -- TODO handle z
-        lda # 1
-        sta sndTurnSoundOn
-
-        hkpZNotPressed <- label
+        when_eq $ do
+            setKeyPressTimer keyPressTimer
+            lda # 1
+            sta sndTurnSoundOn
 
         -- we now know if we need to toggle sound on or not.
         -- let's do that now!
@@ -1490,24 +1412,11 @@ program = mdo
         --   SND_TURNED_OFF = True
         dbgblt 0x200 0x00
         lda sndTurnSoundOn
-        beq hkpSndOff         -- branch if zero flag set (bzs)
-        lda sndTurnedOff
-        beq hkpSndDone        -- SND_TURNED_OFF must be 1, therefore bail if zero is set (bzs)
-        dbgblt 0x200 0xFF
-        lda # 0
-        sta sndTurnedOff
-        jmp hkpSndDone
-        hkpSndOff <- label
-        -- SND_TURN_SOUND_ON == 0, we just need to check if
-        -- SND_TURNED_OFF is already set
-        lda sndTurnedOff
-        bne hkpSndDone        -- SND_TURNED_OFF must be 0, therefore bail if zero is clear (bzc)
-        dbgblt 0x200 1
-        lda # 1
-        sta sndTurnedOff
-        hkpSndDone <- label
-
-
+        if_ne
+            (do lda sndTurnedOff
+                when_ne $ do dbgblt 0x200 0xFF; lda # 0; sta sndTurnedOff)
+            (do lda sndTurnedOff
+                when_eq $ do dbgblt 0x200 1; lda # 1; sta sndTurnedOff)
 
         -- 'R' key press handler
         --
@@ -1515,36 +1424,23 @@ program = mdo
         -- to reset the program. lazyness :)
         lda # 0b11111011
         sta cia1DataPortA
-
         lda cia1DataPortB
         and_ # 0b00000010
-        bne hkpRNotPressed
-
-        setKeyPressTimer keyPressTimer
-        jsr resetScreen
-
-        hkpRNotPressed <- label
-        lda # 0b11111011
+        when_eq $ do
+            setKeyPressTimer keyPressTimer
+            jsr resetScreen
 
         -- 'F' key press handler
+        lda # 0b11111011
         sta cia1DataPortA
         lda cia1DataPortB
         and_ # 0b00100000
-        bne hkpFNotPressed
-
-        setKeyPressTimer keyPressTimer
-        -- Toggle fast multiplication when F is pressed
-        lda useFastMult
-        bne hkpFOff
-        lda # 1
-        sta useFastMult
-        jmp hkpFToggleDone
-        hkpFOff <- label
-        lda # 0
-        sta useFastMult
-        hkpFToggleDone <- label
-
-        hkpFNotPressed <- label
+        when_eq $ do
+            setKeyPressTimer keyPressTimer
+            -- Toggle fast multiplication when F is pressed
+            lda useFastMult
+            if_ne (do lda # 0; sta useFastMult)
+                  (do lda # 1; sta useFastMult)
 
         rts
 
@@ -1553,7 +1449,7 @@ program = mdo
     -- vic_rst_irq interrupt handler
     -- =====================================================================
     vicRstIrq <- label
-    annotate "vicRstIrq" $ mdo
+    annotate "vicRstIrq" $ fitsIn 128 $ mdo
         asl vicInterruptStatus     -- clear latch bit of RST interrupt
         -- SetBorderColor 2
         lda # 2
@@ -2012,8 +1908,9 @@ program = mdo
 
 
     -- =====================================================================
-    -- Frequency tables
+    -- Frequency tables (page-aligned for indexed access)
     -- =====================================================================
+    alignPage
     freqlo <- label
     annotate "freqlo" $
         byte [ 0x0C, 0x1C, 0x2D, 0x3E, 0x47, 0x66, 0x7B, 0x91
@@ -2029,6 +1926,7 @@ program = mdo
              , 0x73, 0xC7, 0x7C, 0x97, 0x1E, 0x18, 0x8B, 0x7E
              , 0xFA, 0x06, 0xAC, 0xF3, 0xE6, 0x8F, 0xF8, 0xFC
              ]
+    samePage freqlo
 
     freqhi <- label
     annotate "freqhi" $
@@ -2045,12 +1943,14 @@ program = mdo
              , 0x6A, 0x70, 0x77, 0x7E, 0x86, 0x8E, 0x96, 0x9F
              , 0xA8, 0xB3, 0xBD, 0xC8, 0xD4, 0xE1, 0xEE, 0xFD
              ]
+    samePage freqhi
 
     arpeggio <- label
     annotate "arpeggio" $
         byte [0, 4, 7, 11, 7, 4, 0, 4]
+    samePage arpeggio
 
-    pure ()
+    pure (toAddr afterXyzStep)
 
 
 -- =========================================================================
@@ -2066,7 +1966,7 @@ main = do
             { useCassette = False, useRS232 = False, useKernalIRQ = False }
         cfg = (c64TargetConfig 0x0801 subs)
             { kernalRom = kernalRomPath, basicRom = basicRomPath, chargenRom = chargenRomPath }
-        (_, bytes, annotations, _labels) = assembleWithLabels cfg program
+        (afterXyzStepAddr, bytes, annotations, _labels) = assembleWithLabels cfg program
         prg = toPRG (origin cfg) bytes
         d64 = toD64 "ATTRAKTOR" prg
     BS.writeFile "attraktor.prg" (BS.pack prg)
@@ -2098,3 +1998,15 @@ main = do
             putStrLn $ formatState labelMap i before
             putStrLn $ formatState labelMap (i+1) after
         [] -> putStrLn "\nNo jump to $0000 found in trace"
+
+    -- Print Lorenz attractor trajectory from emulator trace
+    let iterationStates = filter (\s -> view regPC s == afterXyzStepAddr) states
+    putStrLn $ "\nLorenz attractor trajectory (" ++ show (length iterationStates)
+            ++ " iterations in trace):"
+    putStrLn   "  Iter    Cycle        X           Y           Z"
+    forM_ (zip [1..] iterationStates) $ \(i, s) ->
+        putStrLn $ "  " ++ padR 6 (show (i :: Int))
+               ++ "  " ++ padR 10 (show (view cycles s))
+               ++ "  " ++ padR 12 (showFFloat (Just 4) (readCBMFloat fpXcur s) "")
+               ++ "  " ++ padR 12 (showFFloat (Just 4) (readCBMFloat fpYcur s) "")
+               ++ "  " ++ showFFloat (Just 4) (readCBMFloat fpZcur s) ""
