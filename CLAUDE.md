@@ -4,16 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Haskell embedded DSL for writing 6502 assembly code, targeting the Commodore 64. Programs are assembled at Haskell runtime and exported as `.prg` files or complete `.d64` disk images. Part of a broader retro computing research effort.
+Haskell embedded DSL for writing 6502 assembly code, targeting the Commodore 64. Programs are assembled at Haskell runtime and exported as `.prg` files, complete `.d64` disk images, or ACME cross-assembler `.asm` source files. An ACME parser/assembler frontend can also import `.asm` files back into the pipeline. Part of a broader retro computing research effort.
 
 ## Build Commands
 
 ```bash
-cabal build            # Build the project (library + executable)
+cabal build            # Build the project (library + executables)
 cabal run main         # Run the executable (writes hello.d64 + hello.vs)
-cabal test             # Run the QuickCheck test suite (~190 properties + Dormann)
+cabal test             # Run the QuickCheck test suite (~370 properties + Dormann)
 cabal repl             # Interactive GHC REPL (library modules)
-cabal repl exe:main      # REPL with executable + library
+cabal repl exe:main    # REPL with executable + library
 cabal clean            # Clean build artifacts
 ```
 
@@ -35,7 +35,8 @@ src/
                                --   decode (O(1) Array lookup → Instruction constructor)
                                --   instrSize, baseCycles, canPageCross
   Asm/
-    Monad.hs                   -- ASM monad (State + DList writer), MonadFix for forward refs, ZP allocator
+    Monad.hs                   -- MonadASM/MonadZPAlloc typeclasses, ASM concrete monad,
+                               --   MonadFix for forward refs, ZP allocator
     Mos6502.hs                 -- Operand typeclass (toAddrMode), addressing mode sugar (#, !, tuples),
                                --   instruction emission via ISA.encode
     Mos6502/
@@ -43,13 +44,23 @@ src/
       Ops16.hs                 -- 16-bit arithmetic on Var16 (add16, inc16, cmp16, etc.)
       Memory.hs                -- Alignment (align, alignPage) and page assertions (samePage)
       Debug.hs                 -- fitsIn size assertion, annotate for named labels
-  Target/
-    C64.hs                     -- C64 target config, subsystem-aware ZP free list
+  Backend/
+    ACME.hs                    -- ACME .asm text export: AcmeASM monad (MonadASM + MonadZPAlloc),
+                               --   exportAcme, exportAcmeWith
     C64/
       PRG.hs                   -- .prg file format (2-byte header + bytes)
       D64.hs                   -- .d64 disk image generation (BAM, directory, sector chains)
+      ViceLabels.hs            -- VICE monitor symbol file export
+  Frontend/
+    ACME/
+      Syntax.hs                -- ACME AST types (AcmeStmt, AcmeExpr, etc.)
+      Parser.hs                -- ACME .asm parser (parseAcme)
+      Assemble.hs              -- ACME AST → bytes assembler (assembleAcme)
+  Target/
+    C64.hs                     -- C64 target config, subsystem-aware ZP free list
+    C64/
       Data.hs                  -- Data embedding (byte, word, petscii, pstring)
-      Debug.hs                 -- VICE monitor symbol file export
+      RomLabels.hs             -- Named labels for BASIC/KERNAL ROM routines
       Mem.hs                   -- Re-exports all Mem.* submodules (VIC, SID, CIA, KERNAL, System)
       Mem/
         VIC.hs                 -- VIC-II registers ($D000-$D02E)
@@ -83,6 +94,8 @@ test/
     Control.hs                 -- Structured control flow + 16-bit operations
     Memory.hs                  -- Alignment, samePage, fitsIn, annotate, assembleWithLabels
     Target.hs                  -- PRG, D64, data embedding, VICE label export
+    ACME.hs                    -- ACME export + roundtrip tests
+    Label.hs                   -- Label and namedLabel tests
     Emu/
       Mem.hs                   -- Mem properties: read/write identity, isolation, persistence
       CPU.hs                   -- Lens laws, flag bit positions, updateNZ, memAt
@@ -98,13 +111,15 @@ test/
 ### Key Design Decisions
 
 - **ISA as single source of truth**: `ISA.Mos6502` owns all encoding/decoding knowledge. Both the assembler and emulator depend on it, but not on each other. The `encode` function is a direct 151-arm pattern match; `decode` uses an O(1) `Array Word8` lookup table. Also exports `lo`, `hi`, `w16` used by both.
+- **Tagless final assembly**: The `MonadASM` typeclass (`Asm.Monad`) abstracts over assembly backends. Two instances: `ASM` (concrete byte assembler) and `AcmeASM` (ACME text exporter). `MonadZPAlloc` extends `MonadASM` with zero-page allocation; both monads implement it. Assembly programs written with polymorphic signatures (`MonadASM m => ...` or `(MonadASM m, MonadZPAlloc m) => ...`) can be used with either backend without modification.
 - **Single-pass assembly via MonadFix**: Forward label references use `mdo`/`RecursiveDo`. Works because instruction sizes are determined eagerly (via `instrSize` on `AddressingMode` constructors); only operand values are lazy.
 - **Addressing modes via typeclasses**: `Operand` typeclass with a single method `toAddrMode :: a -> AddressingMode`. Instances for newtypes (`Imm`, `ZP`, `Abs`, etc.), bare types (`Word8` = ZP, `Word16` = Abs), tuples (`(addr, X)`), and singletons (`A`).
 - **`(#)` operator**: Immediate mode sugar (`lda # 0x42`).
 - **`(!)` operator**: Indirect mode sugar via `Indirectable` typeclass (`ptr ! Y`).
 - **Typed ZP variables**: `Var8`, `Var16`, `Ptr` allocated from a `Set Word8` free pool.
 - **Assembly-time errors**: `error` calls for invalid addressing modes, out-of-ZP, branch range issues, `fitsIn`/`samePage` violations.
-- **Output formats**: `[Word8]` lists throughout; `toPRG` adds load address header; `toD64` builds complete disk image.
+- **Output formats**: `[Word8]` lists throughout; `toPRG` adds load address header; `toD64` builds complete disk image; `exportAcmeWith` produces ACME cross-assembler source text.
+- **ACME import/export roundtrip**: `Frontend.ACME` parses ACME `.asm` files into an AST (`Syntax`) and assembles them to bytes (`Assemble`). `Backend.ACME` exports assembly programs to ACME text. Together they enable a roundtrip: EDSL → `.asm` text → parse → assemble → identical bytes.
 - **Emulator lenses**: Hand-rolled van Laarhoven `Lens'` using only `Const`/`Identity` from `base` (~50 lines). Type-compatible with `microlens`/`lens` for future migration. Flag lenses address individual bits of the P register.
 - **Emulator memory**: Persistent lazy nibble trie (`Emu.Mem.Trie`, primary) — 4-level trie keyed on address nibbles, 16-way branching via `SmallArray` from `primitive`. O(1) read/write (4 hops), ~512 bytes allocation per write, structural sharing across trace states. `Leaf` is deliberately lazy in `Word8` to preserve thunks from MonadFix assembly. `Default` nodes represent uninitialized subtrees (read as 0x00). `diffMem` uses `reallyUnsafePtrEquality#` to skip shared subtrees. The original `IntMap.Lazy` implementation is retained as `Emu.Mem.IntMap` for benchmarking comparison.
 - **Emulator validation**: Klaus Dormann's 6502 functional test exercises all 151 instructions including decimal mode. Success address `$3469` after ~96M cycles.

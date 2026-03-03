@@ -1,10 +1,10 @@
 # 6502 Haskell Embedded DSL
 
-A Haskell EDSL for writing 6502 assembly, with first-class support for Commodore 64 targets. Programs are assembled at Haskell runtime and can be exported as `.prg` files or complete `.d64` disk images.
+A Haskell EDSL for writing 6502 assembly, with first-class support for Commodore 64 targets. Programs are assembled at Haskell runtime and can be exported as `.prg` files, complete `.d64` disk images, or ACME cross-assembler `.asm` source files. An ACME frontend can also parse `.asm` files back into the pipeline.
 
 The project also includes a cycle-accurate NMOS 6502 emulator with a lazy trace API, enabling time-travel debugging and differential memory analysis — all without leaving Haskell.
 
-The ISA module (`ISA.Mos6502`) is the single source of truth for the 6502 instruction set — encoding, decoding, sizes, and cycle costs — shared between the assembler and the emulator.
+The ISA module (`ISA.Mos6502`) is the single source of truth for the 6502 instruction set — encoding, decoding, sizes, and cycle costs — shared between the assembler and the emulator. The assembly API uses a tagless final style (`MonadASM` typeclass) so that the same program can target both the byte assembler and the ACME text exporter.
 
 ## Setup
 
@@ -41,7 +41,7 @@ cabal build              # Build everything
 cabal run main           # Run the executable (writes hello.d64 + hello.vs)
 cabal run color-washer   # Run the color-wash demo (writes color-washer.d64)
 cabal run trace-explorer # Run the emulator trace debugging showcase
-cabal test               # Run the test suite (~196 properties + Dormann)
+cabal test               # Run the test suite (~370 properties + Dormann)
 cabal bench mem-bench    # Run memory backend benchmarks (Trie vs IntMap)
 ```
 
@@ -61,46 +61,53 @@ cabal repl exe:main
 
 ## Quick Start
 
-The executable in `app/Main.hs` assembles a C64 program that fills the screen with light blue blocks on a black background and writes it as a `.d64` disk image:
+The executable in `app/Main.hs` assembles a C64 program that fills the screen with light blue blocks on a black background and writes it as a `.d64` disk image plus a VICE symbol file:
 
 ```haskell
-import Asm.Monad (TargetConfig(..), assemble, label)
+import Asm.Monad (ASM, TargetConfig(..), assembleWithLabels, label)
 import Asm.Mos6502
 import Asm.Mos6502.Control (loop_)
+import Asm.Mos6502.Debug (annotate)
 import Target.C64 (c64TargetConfig, defaultC64Subsystems)
+import Backend.C64.D64 (toD64)
+import Backend.C64.PRG (toPRG)
+import Backend.C64.ViceLabels (exportViceLabels)
 import Target.C64.Mem
-import Target.C64.PRG (toPRG)
-import Target.C64.D64 (toD64)
 
 main :: IO ()
 main = do
     let cfg = c64TargetConfig 0xC000 defaultC64Subsystems
-        (_, bytes) = assemble cfg program
+        (_, bytes, annotations, _labels) = assembleWithLabels cfg program
         prg = toPRG (origin cfg) bytes
         d64 = toD64 "HELLO" prg
     BS.writeFile "hello.d64" (BS.pack d64)
+    writeFile "hello.vs" (exportViceLabels annotations)
 
 program :: ASM ()
 program = do
-    sei; cld; ldx # 0xFF; txs
-    lda # colorBlack
-    sta vicBorderColor
-    sta vicBackgroundColor0
-    ldx # 0x00
-    fillLoop <- label
-    lda # 0xA0
-    sta (screenRAM, X)
-    sta (screenRAM + 0x0100, X)
-    sta (screenRAM + 0x0200, X)
-    sta (screenRAM + 0x0300, X)
-    lda # colorLightBlue
-    sta (colorRAM, X)
-    sta (colorRAM + 0x0100, X)
-    sta (colorRAM + 0x0200, X)
-    sta (colorRAM + 0x0300, X)
-    inx
-    bne fillLoop
-    loop_ nop
+    annotate "init" $ do
+        sei; cld; ldx # 0xFF; txs
+    annotate "setColors" $ do
+        lda # colorBlack
+        sta vicBorderColor
+        sta vicBackgroundColor0
+    annotate "fillLoop" $ do
+        ldx # 0x00
+        fillLoop <- label
+        lda # 0xA0
+        sta (screenRAM, X)
+        sta (screenRAM + 0x0100, X)
+        sta (screenRAM + 0x0200, X)
+        sta (screenRAM + 0x0300, X)
+        lda # colorLightBlue
+        sta (colorRAM, X)
+        sta (colorRAM + 0x0100, X)
+        sta (colorRAM + 0x0200, X)
+        sta (colorRAM + 0x0300, X)
+        inx
+        bne fillLoop
+    annotate "spin" $ do
+        loop_ nop
 ```
 
 Run `cabal run main` to produce `hello.d64`, which can be loaded in VICE or transferred to real hardware.
@@ -324,17 +331,17 @@ samePage tableStart    -- error if table crossed a page boundary
 
 ```haskell
 let cfg = c64TargetConfig 0xC000 defaultC64Subsystems
-    (_, bytes, labels) = assembleWithLabels cfg $ do
+    (_, bytes, annotations, _labels) = assembleWithLabels cfg $ do
         annotate "init" $ do
             sei; cld
         annotate "mainLoop" $ do
             loop_ nop
 ```
 
-**VICE symbol file export** — generate monitor symbol files from collected labels:
+**VICE symbol file export** — generate monitor symbol files from collected annotations:
 
 ```haskell
-let symbols = exportViceLabels labels
+let symbols = exportViceLabels annotations
 writeFile "program.vs" symbols
 -- File contents:
 -- al C:C000 .init
@@ -366,6 +373,49 @@ let prg = toPRG 0xC000 bytes
 ```haskell
 let d64 = toD64 "DISKNAME" prg
 BS.writeFile "output.d64" (BS.pack d64)
+```
+
+**ACME assembly text** — export an EDSL program as ACME cross-assembler source:
+
+```haskell
+import Backend.ACME (exportAcmeWith)
+
+writeFile "output.asm" (exportAcmeWith cfg program)
+```
+
+This requires `program` to have a polymorphic signature (`MonadASM m => ...` or `(MonadASM m, MonadZPAlloc m) => ...`) so it can be instantiated at both the byte assembler (`ASM`) and the text exporter (`AcmeASM`).
+
+### ACME Import
+
+`Frontend.ACME` provides a parser and assembler for ACME `.asm` files:
+
+```haskell
+import Frontend.ACME.Parser (parseAcme)
+import Frontend.ACME.Assemble (assembleAcme)
+
+let Right ast = parseAcme sourceText
+    bytes     = assembleAcme ast
+```
+
+Together with `Backend.ACME`, this enables a full roundtrip: EDSL program → ACME text → parse → assemble → identical bytes.
+
+### Tagless Final Assembly
+
+The assembly API uses a tagless final style via the `MonadASM` typeclass. Programs written with polymorphic signatures work with both backends:
+
+```haskell
+-- Works with both ASM (byte output) and AcmeASM (text output)
+myRoutine :: MonadASM m => m ()
+myRoutine = do
+    lda # 0x42
+    sta (0x0400 :: Word16)
+
+-- Programs using ZP allocation need both constraints
+myProgram :: (MonadASM m, MonadZPAlloc m) => m ()
+myProgram = do
+    ptr <- allocPtr
+    lda # 0x00
+    sta ptr
 ```
 
 ## Emulator
@@ -483,13 +533,25 @@ cabal run trace-explorer
 src/
   ISA/Mos6502.hs              -- 6502 ISA: types, encode, decode, instrSize, baseCycles, canPageCross
   Asm/
-    Monad.hs                   -- ASM monad, MonadFix, ZP allocator
+    Monad.hs                   -- MonadASM/MonadZPAlloc typeclasses, ASM concrete monad,
+                               --   MonadFix for forward refs, ZP allocator
     Mos6502.hs                 -- Operand typeclass, addressing mode sugar, instruction emission
     Mos6502/
       Control.hs               -- Structured control flow (if_eq, while_, for_x, loop_)
       Ops16.hs                 -- 16-bit arithmetic (add16, inc16, cmp16, etc.)
       Memory.hs                -- Alignment and page assertions
       Debug.hs                 -- Size assertions, named labels
+  Backend/
+    ACME.hs                    -- ACME .asm text export (AcmeASM monad, exportAcme, exportAcmeWith)
+    C64/
+      PRG.hs                   -- .prg file format (2-byte header + bytes)
+      D64.hs                   -- .d64 disk image generation
+      ViceLabels.hs            -- VICE monitor symbol file export
+  Frontend/
+    ACME/
+      Syntax.hs                -- ACME AST types
+      Parser.hs                -- ACME .asm parser (parseAcme)
+      Assemble.hs              -- ACME AST → bytes assembler (assembleAcme)
   Emu/
     Mem.hs                     -- Re-export of Emu.Mem.Trie
     Mem/
@@ -499,12 +561,10 @@ src/
     Step.hs                    -- Instruction execution (all 151 opcodes, cycle counting)
     Trace.hs                   -- Lazy trace, runUntil, runN, loadProgram, observation combinators
   Target/
-    C64.hs                     -- C64 target config
+    C64.hs                     -- C64 target config, subsystem-aware ZP free list
     C64/
-      PRG.hs                   -- .prg file format
-      D64.hs                   -- .d64 disk image generation
       Data.hs                  -- Data embedding (byte, word, petscii)
-      Debug.hs                 -- VICE symbol file export
+      RomLabels.hs             -- Named labels for BASIC/KERNAL ROM routines
       Mem.hs                   -- Full C64 memory map (VIC, SID, CIA, KERNAL)
 app/Main.hs                    -- Example: colored screen fill
 examples/
@@ -512,7 +572,7 @@ examples/
   TraceExplorer.hs             -- Example: emulator trace debugging showcase
 bench/Main.hs                  -- Memory backend benchmarks (Trie vs IntMap)
 test/
-  Main.hs                      -- Test runner (~196 properties)
+  Main.hs                      -- Test runner (~370 properties)
   data/
     6502_functional_test.bin   -- Klaus Dormann's 6502 functional test (65536 bytes)
   Test/
@@ -523,6 +583,8 @@ test/
     Control.hs                 -- Control flow + 16-bit ops tests
     Memory.hs                  -- Alignment, assertions, labels tests
     Target.hs                  -- PRG, D64, data embedding, VICE export tests
+    ACME.hs                    -- ACME export + roundtrip tests
+    Label.hs                   -- Label and namedLabel tests
     Emu/
       Mem.hs                   -- Mem properties: read/write identity, isolation
       CPU.hs                   -- Lens laws, flag positions, updateNZ, memAt

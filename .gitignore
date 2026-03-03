@@ -7,5 +7,6 @@ dist-newstyle/
 *.prg
 *.d64
 *.vs
+*.asm
 *.txt
 *.png

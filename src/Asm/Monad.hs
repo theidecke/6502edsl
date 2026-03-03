@@ -12,6 +12,7 @@ module Asm.Monad
     , assembleWithLabels
     , lo
     , hi
+    , findContiguous
     ) where
 
 import Control.Monad.Fix (MonadFix(..))

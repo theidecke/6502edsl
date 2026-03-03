@@ -1,4 +1,4 @@
-module Backend.ACME (AcmeASM, exportAcme) where
+module Backend.ACME (AcmeASM, exportAcme, exportAcmeWith) where
 
 import Control.Monad.Fix (MonadFix(..))
 import Data.Char (toLower)
@@ -6,10 +6,12 @@ import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Word (Word8, Word16)
 import Numeric (showHex)
 
-import Asm.Monad (MonadASM(..), Label(..))
+import Asm.Monad (MonadASM(..), MonadZPAlloc(..), TargetConfig(..), Label(..), findContiguous)
 import ISA.Mos6502 (Instruction(..), AddressingMode(..), instrSize)
 
 -- | Items recorded during AcmeASM execution.
@@ -19,6 +21,7 @@ data AcmeItem
 
 data AcmeState = AcmeState
     { acmePC          :: !Word16
+    , acmeFreeZP      :: !(Set Word8)
     , acmeLabels      :: [Label]
     , acmeAnnotations :: [String]
     }
@@ -76,14 +79,36 @@ instance MonadASM AcmeASM where
     popAnnotation = AcmeASM $ \s ->
         ((), s { acmeAnnotations = drop 1 (acmeAnnotations s) }, mempty)
 
+instance MonadZPAlloc AcmeASM where
+    allocZP n
+        | n <= 0    = error "allocZP: requested size must be positive"
+        | otherwise = AcmeASM $ \s ->
+            let free  = acmeFreeZP s
+                start = findContiguous n (Set.toAscList free)
+                block = Set.fromList [start .. start + fromIntegral n - 1]
+            in  (start, s { acmeFreeZP = free `Set.difference` block }, mempty)
+
 -- ---------------------------------------------------------------------------
 -- Export
 -- ---------------------------------------------------------------------------
 
 -- | Run an AcmeASM program and produce ACME assembly text.
+-- Uses an empty zero-page pool (no ZP allocation available).
 exportAcme :: Word16 -> AcmeASM a -> String
 exportAcme org (AcmeASM f) =
-    let s0 = AcmeState { acmePC = org, acmeLabels = [], acmeAnnotations = [] }
+    let s0 = AcmeState { acmePC = org, acmeFreeZP = Set.empty
+                        , acmeLabels = [], acmeAnnotations = [] }
+        (_a, s, Endo dl) = f s0
+        items = dl []
+        addrToName = buildLabelMap (acmeLabels s)
+    in  renderAcme org items addrToName
+
+-- | Run an AcmeASM program using a 'TargetConfig' for origin and ZP pool.
+exportAcmeWith :: TargetConfig -> AcmeASM a -> String
+exportAcmeWith cfg (AcmeASM f) =
+    let org = origin cfg
+        s0 = AcmeState { acmePC = org, acmeFreeZP = freeZeroPage cfg
+                        , acmeLabels = [], acmeAnnotations = [] }
         (_a, s, Endo dl) = f s0
         items = dl []
         addrToName = buildLabelMap (acmeLabels s)
