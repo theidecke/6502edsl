@@ -16,6 +16,7 @@ import Asm.Mos6502
 import Asm.Mos6502.Control (if_ne, if_cs, when_eq, when_ne, for_x, for_y)
 import Asm.Mos6502.Debug (annotate, fitsIn)
 import Asm.Mos6502.Memory (alignPage, samePage)
+import Asm.Mos6502.Ops16 (lshift16, rshift16)
 import Backend.C64.D64 (toD64)
 import Backend.C64.PRG (toPRG)
 import Backend.C64.ViceLabels (exportViceLabels)
@@ -49,18 +50,18 @@ fp10      = 0xC55A
 fpScaleY  = 0xC560
 fpOffsetX = 0xC570
 
-intX, intY, intM :: Word16
-intX = 0xC600
-intY = 0xC602
-intM = 0xC604
+intX, intY, intM :: Mem16
+intX = Mem16 0xC600
+intY = Mem16 0xC602
+intM = Mem16 0xC604
 
-intXdt, intYdt, intZdt :: Word16
-intXdt = 0xC606
-intYdt = 0xC608
-intZdt = 0xC60A
+intXdt, intYdt, intZdt :: Mem16
+intXdt = Mem16 0xC606
+intYdt = Mem16 0xC608
+intZdt = Mem16 0xC60A
 
-scrAddr :: Word16
-scrAddr = 0xC630
+scrAddr :: Mem16
+scrAddr = Mem16 0xC630
 
 -- X offset where the attractor is visually split in two halves;
 -- used for implementing the left and right sound switching
@@ -72,11 +73,11 @@ screenMaskOr0  = 0xC640
 screenMaskAnd0 = 0xC648
 
 -- Set to 1 to use fast mult.
-useFastMult :: Word16
-useFastMult = 0xC800
+useFastMult :: Mem8
+useFastMult = Mem8 0xC800
 
-testMem :: Word16
-testMem = 0xC650
+testMem :: Mem16
+testMem = Mem16 0xC650
 
 -- =========================================================================
 -- FAC/ARG internal zero-page addresses (hardcoded, NOT allocated)
@@ -201,11 +202,11 @@ setIntParam name value = do
     jsr romMOVMF
 
 -- | Convert FAC1 to 16-bit signed int and store: +fac1_to_int16
-fac1ToInt16 :: MonadASM m => Word16 -> m ()
+fac1ToInt16 :: (MonadASM m, Loc16 a) => a -> m ()
 fac1ToInt16 location = do
     jsr romFACINX
-    sty location
-    sta (location + 1)
+    sty (lo16 location)
+    sta (hi16 location)
 
 -- | Calculate f1 = f1 / f2: +div2
 div2 :: MonadASM m => Word16 -> Word16 -> m ()
@@ -230,7 +231,7 @@ multiplyDtToFac1 = do
     clc
 
 -- | Save int(grad/8) to target: +save_int_gradient_to
-saveIntGradientTo :: MonadASM m => Word16 -> m ()
+saveIntGradientTo :: (MonadASM m, Loc16 a) => a -> m ()
 saveIntGradientTo target = do
     -- save int(grad/8) to target
     jsr romMOVFA
@@ -240,18 +241,6 @@ saveIntGradientTo target = do
     sta facExp
     fac1ToInt16 target
     jsr romMOVEF
-
--- | 16-bit left shift: +lshift_16bit
-lshift16 :: (MonadASM m, Operand a, Operand b) => a -> b -> m ()
-lshift16 hb lb = do
-    asl lb
-    rol hb
-
--- | 16-bit right shift: +rshift_16bit
-rshift16 :: (MonadASM m, Operand a, Operand b) => a -> b -> m ()
-rshift16 hb lb = do
-    lsr hb
-    ror lb
 
 -- | Debug blit: +dbgblt
 dbgblt :: MonadASM m => Word16 -> Word8 -> m ()
@@ -294,13 +283,13 @@ drawloop fastMultLbl blitXyLbl zfb = do
     fpAdd fpC
     storeFac fpXcur
     fac1ToInt16 intX
-    lda intX
+    lda (lo16 intX)
     sta zfb
-    lda (intX + 1)
+    lda (hi16 intX)
     sta (zfb + 1)
-    ldy intY
+    ldy (lo16 intY)
     jsr blitXyLbl
-    lda intX
+    lda (lo16 intX)
     cmp # 100
     bcc loopStart
 
@@ -632,11 +621,11 @@ program = mdo
         drawLoop <- label
         jsr xyzStep
         afterStep <- label
-        lda intX
+        lda (lo16 intX)
         sta zpFB
-        lda (intX + 1)
+        lda (hi16 intX)
         sta (zpFB + 1)
-        ldy intY
+        ldy (lo16 intY)
 
         jsr blitXy
 
@@ -881,22 +870,22 @@ program = mdo
         jsr romQINT
         lda facMant2              -- HB of 16 bit int
         ldy facMant3              -- LB of 16 bit int
-        sta (intY + 1)
-        sty intY
-        rshift16 (intY + 1) intY
-        rshift16 (intY + 1) intY
-        rshift16 (intY + 1) intY
-        rshift16 (intY + 1) intY
-        rshift16 (intY + 1) intY
-        rshift16 (intY + 1) intY
+        sta (hi16 intY)
+        sty (lo16 intY)
+        rshift16 intY
+        rshift16 intY
+        rshift16 intY
+        rshift16 intY
+        rshift16 intY
+        rshift16 intY
 
         -- from here on we will only use INT_Y since the possible Y
         -- range is from 0 to 200 anyway.
         -- we need to invert it so the image is not flipped, though.
         clc
         lda # 200
-        sbc intY
-        sta intY
+        sbc (lo16 intY)
+        sta (lo16 intY)
 
         -- compute l2 norm L2(int(dx), int(dy)+2int(dz)) to get the current
         -- curve's magnitude. note that we only scale dz by 2 as simulations
@@ -908,39 +897,39 @@ program = mdo
         --   for our purporses (math. correctness to hell)
         --
         --
-        lda intYdt
+        lda (lo16 intYdt)
         clc
-        adc intZdt
-        adc intZdt
-        sta intM              -- INT_M = A = dy + 2dz
-        cmp intXdt
+        adc (lo16 intZdt)
+        adc (lo16 intZdt)
+        sta (lo16 intM)       -- INT_M = A = dy + 2dz
+        cmp (lo16 intXdt)
 
         annotate "l2Magnitude" $
             if_cs
                 (do -- x is max, y is min
-                    lda intM
+                    lda (lo16 intM)
                     lsr_a
                     lsr_a             -- scale dy+2dz value by 4 (we do x/4 later)
                     lsr_a             -- scale INT_M by 2 since it contains the minimum
-                    sta intM
-                    lda intXdt
+                    sta (lo16 intM)
+                    lda (lo16 intXdt)
                     lsr_a
                     lsr_a
                     clc
-                    adc intM          -- INT_M = dx/4 (max) + ((dy + 2dz)/4)/2
-                    sta intM)
+                    adc (lo16 intM)   -- INT_M = dx/4 (max) + ((dy + 2dz)/4)/2
+                    sta (lo16 intM))
                 (do -- y is max, x is min
-                    lda intM
+                    lda (lo16 intM)
                     lsr_a
                     lsr_a             -- INT_M = (dy+2dz)/4 (max)
-                    sta intM
-                    lda intXdt
+                    sta (lo16 intM)
+                    lda (lo16 intXdt)
                     lsr_a
                     lsr_a             -- scale dx by 4
                     lsr_a             -- scale dx by 2 because its the minimum
                     clc
-                    adc intM
-                    sta intM)
+                    adc (lo16 intM)
+                    sta (lo16 intM))
 
         rts
 
@@ -969,8 +958,8 @@ program = mdo
         sta (zpFB + 1)
 
         -- X(n) << 2
-        lshift16 (zpFB + 1) zpFB
-        lshift16 (zpFB + 1) zpFB
+        lshift16 zpFB
+        lshift16 zpFB
 
         -- add X(n)
         clc
@@ -1016,9 +1005,9 @@ program = mdo
 
         -- intitialize addr. variable to 0x2000
         lda # 0x00
-        sta scrAddr
+        sta (lo16 scrAddr)
         lda # 0x20
-        sta (scrAddr + 1)
+        sta (hi16 scrAddr)
 
         -- compute pixel mask to OR on the region; this will set the pixel bit
         -- in the byte for which we're currently computing the address of.
@@ -1037,11 +1026,11 @@ program = mdo
         clc
         lda zpFB
         and_ # 0xF8
-        adc scrAddr
-        sta scrAddr
+        adc (lo16 scrAddr)
+        sta (lo16 scrAddr)
         lda (zpFB + 1)
-        adc (scrAddr + 1)
-        sta (scrAddr + 1)
+        adc (hi16 scrAddr)
+        sta (hi16 scrAddr)
 
         -- _y_shift_global
         --    yoff_row = (y >> 3) * 40 * 8
@@ -1061,15 +1050,15 @@ program = mdo
         sta zpFB
         sta zpFD
         -- y1 = u << 5
-        lshift16 (zpFB + 1) zpFB
-        lshift16 (zpFB + 1) zpFB
-        lshift16 (zpFB + 1) zpFB
-        lshift16 (zpFB + 1) zpFB
-        lshift16 (zpFB + 1) zpFB
+        lshift16 zpFB
+        lshift16 zpFB
+        lshift16 zpFB
+        lshift16 zpFB
+        lshift16 zpFB
         -- y2 = u << 3
-        lshift16 (zpFD + 1) zpFD
-        lshift16 (zpFD + 1) zpFD
-        lshift16 (zpFD + 1) zpFD
+        lshift16 zpFD
+        lshift16 zpFD
+        lshift16 zpFD
         -- y_off_row = y1 + y2
         clc
         lda zpFD
@@ -1081,28 +1070,28 @@ program = mdo
 
         -- add y_off_row to screen addr.
         clc
-        lda scrAddr
+        lda (lo16 scrAddr)
         adc zpFB
-        sta scrAddr
-        lda (scrAddr + 1)
+        sta (lo16 scrAddr)
+        lda (hi16 scrAddr)
         adc (zpFB + 1)
-        sta (scrAddr + 1)
+        sta (hi16 scrAddr)
 
         -- add yoff_local to screen_addr
         -- _y_shift_local
         clc
         tya
         and_ # 7
-        adc scrAddr
-        sta scrAddr
+        adc (lo16 scrAddr)
+        sta (lo16 scrAddr)
         lda # 0
-        adc (scrAddr + 1)
-        sta (scrAddr + 1)
+        adc (hi16 scrAddr)
+        sta (hi16 scrAddr)
 
         -- load addr., mask pattern, store again
-        lda scrAddr
+        lda (lo16 scrAddr)
         sta zpFB
-        lda (scrAddr + 1)
+        lda (hi16 scrAddr)
         sta (zpFB + 1)
         ldy # 0
         lda (zpFB ! Y)
@@ -1124,29 +1113,26 @@ program = mdo
 
         -- load rng state into screen addr
         lda rngStateLo
-        sta scrAddr
+        sta (lo16 scrAddr)
         lda rngStateHi
-        sta (scrAddr + 1)
+        sta (hi16 scrAddr)
         -- divide by 8 to convert from pixel offset to byte offset
-        lsr (scrAddr + 1)
-        ror scrAddr
-        lsr (scrAddr + 1)
-        ror scrAddr
-        lsr (scrAddr + 1)
-        ror scrAddr
+        rshift16 scrAddr
+        rshift16 scrAddr
+        rshift16 scrAddr
         -- add baseline screen address 0x2000
         lda # 0x20
-        adc (scrAddr + 1)
-        sta (scrAddr + 1)
+        adc (hi16 scrAddr)
+        sta (hi16 scrAddr)
 
         lda rngStateLo
         and_ # 7
         tax
 
         -- load addr., mask pattern, store again
-        lda scrAddr
+        lda (lo16 scrAddr)
         sta zpFB
-        lda (scrAddr + 1)
+        lda (hi16 scrAddr)
         sta (zpFB + 1)
 
         ldy # 0
@@ -1536,11 +1522,12 @@ program = mdo
     annotate "multSubroutine" $ mdo
         -- lda #<FREQ_LO_VOICE1
         -- lda #<FILTER_CUTOFF_LO
-        lda # lo testMem
+        let Mem16 testMemAddr = testMem
+        lda # lo testMemAddr
         sta p0
         -- lda #>FREQ_LO_VOICE1
         -- lda #>FILTER_CUTOFF_LO
-        lda # hi testMem
+        lda # hi testMemAddr
         sta (p0 + 1)
 
         -- Inlined mult_subroutine.asm
@@ -1631,15 +1618,15 @@ program = mdo
 
         jsr multSubroutine
 
-        rshift16 (testMem + 1) testMem
-        rshift16 (testMem + 1) testMem
-        rshift16 (testMem + 1) testMem
-        rshift16 (testMem + 1) testMem
-        rshift16 (testMem + 1) testMem
-        lda testMem
+        rshift16 testMem
+        rshift16 testMem
+        rshift16 testMem
+        rshift16 testMem
+        rshift16 testMem
+        lda (lo16 testMem)
         and_ # 3
         sta sidFilterCutoffLo
-        lda (testMem + 1)
+        lda (hi16 testMem)
         and_ # 3
         asl_a
         asl_a
@@ -1647,7 +1634,7 @@ program = mdo
         asl_a
         asl_a
         sta p0                     -- use p0 as temp (was $de in original)
-        lda testMem
+        lda (lo16 testMem)
         lsr_a
         lsr_a
         lsr_a
