@@ -1,4 +1,5 @@
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Asm.Mos6502
     ( -- * Operand newtypes
@@ -9,9 +10,12 @@ module Asm.Mos6502
     , Operand(..)
       -- * Singleton types
     , X_(..), Y_(..), A_(..)
-      -- * Variable types
+      -- * Variable types (zero-page)
     , Var8(..), Var16(..), Ptr(..)
-    , lo16, hi16
+      -- * Memory location types (absolute)
+    , Mem8(..), Mem16(..), MemPtr(..)
+      -- * 16-bit location typeclass
+    , Loc16(..)
       -- * Addressing mode sugar
     , (#), Indirectable(..)
       -- * Typed allocation
@@ -108,22 +112,55 @@ instance Num Ptr where
     signum (Ptr a) = Ptr (signum a)
     negate (Ptr a) = Ptr (negate a)
 
-lo16 :: Var16 -> Var8
-lo16 (Var16 a) = Var8 a
+-- ---------------------------------------------------------------------------
+-- Absolute memory location types
+-- ---------------------------------------------------------------------------
 
-hi16 :: Var16 -> Var8
-hi16 (Var16 a) = Var8 (a + 1)
+newtype Mem8   = Mem8   Word16 deriving (Show, Eq)
+newtype Mem16  = Mem16  Word16 deriving (Show, Eq)
+newtype MemPtr = MemPtr Word16 deriving (Show, Eq)
+
+-- ---------------------------------------------------------------------------
+-- Loc16 typeclass — 16-bit memory locations (ZP or absolute)
+-- ---------------------------------------------------------------------------
+
+class Operand (Byte a) => Loc16 a where
+    type Byte a
+    lo16 :: a -> Byte a
+    hi16 :: a -> Byte a
+
+instance Loc16 Var16 where
+    type Byte Var16 = Var8
+    lo16 (Var16 a) = Var8 a
+    hi16 (Var16 a) = Var8 (a + 1)
+
+instance Loc16 Ptr where
+    type Byte Ptr = Var8
+    lo16 (Ptr a) = Var8 a
+    hi16 (Ptr a) = Var8 (a + 1)
+
+instance Loc16 Mem16 where
+    type Byte Mem16 = Mem8
+    lo16 (Mem16 a) = Mem8 a
+    hi16 (Mem16 a) = Mem8 (a + 1)
+
+instance Loc16 MemPtr where
+    type Byte MemPtr = Mem8
+    lo16 (MemPtr a) = Mem8 a
+    hi16 (MemPtr a) = Mem8 (a + 1)
 
 -- ---------------------------------------------------------------------------
 -- Operand instances for bare types and tuples
 -- ---------------------------------------------------------------------------
 
-instance Operand Word8  where toAddrMode w          = ZeroPage w
-instance Operand Word16 where toAddrMode w          = Absolute w
-instance Operand A_     where toAddrMode _           = Accumulator
-instance Operand Var8   where toAddrMode (Var8 a)   = ZeroPage a
-instance Operand Ptr    where toAddrMode (Ptr a)    = ZeroPage a
-instance Operand Label  where toAddrMode l          = Absolute (labelAddr l)
+instance Operand Word8  where toAddrMode w            = ZeroPage w
+instance Operand Word16 where toAddrMode w            = Absolute w
+instance Operand A_     where toAddrMode _             = Accumulator
+instance Operand Var8   where toAddrMode (Var8 a)     = ZeroPage a
+instance Operand Ptr    where toAddrMode (Ptr a)      = ZeroPage a
+instance Operand Mem8   where toAddrMode (Mem8 a)     = Absolute a
+instance Operand MemPtr where toAddrMode (MemPtr a)   = Absolute a
+instance Operand Label  where toAddrMode l            = Absolute (labelAddr l)
 
 instance Operand (Word8,  X_) where toAddrMode (w, _) = ZeroPageX w
 instance Operand (Word8,  Y_) where toAddrMode (w, _) = ZeroPageY w

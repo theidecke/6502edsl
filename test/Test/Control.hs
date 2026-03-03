@@ -5,7 +5,7 @@ import Data.Word (Word8)
 import Asm.Monad (ASM)
 import Asm.Mos6502
 import Asm.Mos6502.Control (if_, if_eq, if_ne, if_cs, if_cc, if_pl, if_mi, while_, for_x, for_y, loop_)
-import Asm.Mos6502.Ops16 (add16, sub16, inc16, dec16, cmp16, mov16, load16)
+import Asm.Mos6502.Ops16 (add16, sub16, inc16, dec16, cmp16, mov16, load16, lshift16, rshift16)
 import Test.Helpers
 
 -- ---------------------------------------------------------------------------
@@ -140,6 +140,51 @@ prop_cmp16Bytes =
     in  bytes == [0xA5, 0x02, 0xC5, 0x04, 0xA5, 0x03, 0xE5, 0x05]
 
 -- ---------------------------------------------------------------------------
+-- Loc16 typeclass: Mem16 emits absolute, Ptr emits ZP (5 props)
+-- ---------------------------------------------------------------------------
+
+prop_lshift16Mem16 :: Bool
+prop_lshift16Mem16 =
+    -- lshift16 on Mem16 should emit ASL Absolute, ROL Absolute
+    asm (lshift16 (Mem16 0xC600))
+    == [ 0x0E, 0x00, 0xC6   -- ASL $C600
+       , 0x2E, 0x01, 0xC6   -- ROL $C601
+       ]
+
+prop_rshift16Mem16 :: Bool
+prop_rshift16Mem16 =
+    -- rshift16 on Mem16 should emit LSR Absolute, ROR Absolute
+    asm (rshift16 (Mem16 0xC650))
+    == [ 0x4E, 0x51, 0xC6   -- LSR $C651
+       , 0x6E, 0x50, 0xC6   -- ROR $C650
+       ]
+
+prop_load16Mem16 :: Bool
+prop_load16Mem16 =
+    -- load16 on Mem16 should emit LDA #imm, STA Absolute pairs
+    asm (load16 (Mem16 0xC600) 0xABCD)
+    == [ 0xA9, 0xCD, 0x8D, 0x00, 0xC6   -- LDA #$CD; STA $C600
+       , 0xA9, 0xAB, 0x8D, 0x01, 0xC6   -- LDA #$AB; STA $C601
+       ]
+
+prop_lshift16Ptr :: Bool
+prop_lshift16Ptr =
+    -- lshift16 on Ptr should emit ASL ZeroPage, ROL ZeroPage
+    asmZP (allocPtr >>= \p -> lshift16 p)
+    == [ 0x06, 0x02   -- ASL $02
+       , 0x26, 0x03   -- ROL $03
+       ]
+
+prop_inc16Mem16 :: Bool
+prop_inc16Mem16 =
+    -- inc16 on Mem16 should emit INC Absolute with BNE skip
+    asm (inc16 (Mem16 0xC600))
+    == [ 0xEE, 0x00, 0xC6   -- INC $C600
+       , 0xD0, 0x03          -- BNE +3
+       , 0xEE, 0x01, 0xC6   -- INC $C601
+       ]
+
+-- ---------------------------------------------------------------------------
 -- Test list
 -- ---------------------------------------------------------------------------
 
@@ -170,4 +215,11 @@ tests =
     , checkOnce "sub16 bytes"               prop_sub16Bytes
     , checkOnce "mov16 bytes"               prop_mov16Bytes
     , checkOnce "cmp16 bytes"               prop_cmp16Bytes
+
+    , section "Loc16 typeclass"
+    , checkOnce "lshift16 Mem16 (absolute)" prop_lshift16Mem16
+    , checkOnce "rshift16 Mem16 (absolute)" prop_rshift16Mem16
+    , checkOnce "load16 Mem16 (absolute)"   prop_load16Mem16
+    , checkOnce "lshift16 Ptr (zero-page)"  prop_lshift16Ptr
+    , checkOnce "inc16 Mem16 (absolute)"    prop_inc16Mem16
     ]

@@ -19,7 +19,7 @@ cabal clean            # Clean build artifacts
 
 ## Architecture
 
-- **Build system**: Cabal (spec 3.0), GHC2024 language edition, GHC 9.10.1
+- **Build system**: Cabal (spec 3.0), GHC2024 language edition, GHC 9.10.1. GHC2024 enables `DataKinds`, `DerivingStrategies`, `ExplicitForAll`, `FlexibleContexts`, `FlexibleInstances`, `GADTSyntax`, `MultiParamTypeClasses`, `MonoLocalBinds`, `RoleAnnotations` among others — but NOT `TypeFamilies`, `FunctionalDependencies`, or `RecursiveDo`, which are enabled per-module via pragmas where needed.
 - **Version**: 0.3.0.0
 - **Source layout**: Library in `src/`, executable in `app/`, tests in `test/`
 - **Dependencies**: `base`, `array`, `containers`, `primitive` (library); adds `bytestring` (exe), `QuickCheck` + `bytestring` (test); `tasty-bench` + `deepseq` (benchmark)
@@ -38,10 +38,11 @@ src/
     Monad.hs                   -- MonadASM/MonadZPAlloc typeclasses, ASM concrete monad,
                                --   MonadFix for forward refs, ZP allocator
     Mos6502.hs                 -- Operand typeclass (toAddrMode), addressing mode sugar (#, !, tuples),
-                               --   instruction emission via ISA.encode
+                               --   typed memory locations (Var8/Var16/Ptr for ZP, Mem8/Mem16/MemPtr
+                               --   for absolute), Loc16 typeclass, instruction emission via ISA.encode
     Mos6502/
       Control.hs               -- Structured control flow (if_eq, while_, for_x, loop_, etc.)
-      Ops16.hs                 -- 16-bit arithmetic on Var16 (add16, inc16, cmp16, etc.)
+      Ops16.hs                 -- 16-bit arithmetic via Loc16 (add16, inc16, lshift16, etc.)
       Memory.hs                -- Alignment (align, alignPage) and page assertions (samePage)
       Debug.hs                 -- fitsIn size assertion, annotate for named labels
   Backend/
@@ -91,7 +92,7 @@ test/
     ISA.hs                     -- ISA tests: lo/hi, table integrity, encode/decode, sizes, cycles
     Instructions.hs            -- EDSL instruction functions + addressing mode sugar
     Monad.hs                   -- Monad/PC tracking, branches, ZP allocation
-    Control.hs                 -- Structured control flow + 16-bit operations
+    Control.hs                 -- Structured control flow, 16-bit operations, Loc16 typeclass tests
     Memory.hs                  -- Alignment, samePage, fitsIn, annotate, assembleWithLabels
     Target.hs                  -- PRG, D64, data embedding, VICE label export
     ACME.hs                    -- ACME export + roundtrip tests
@@ -116,7 +117,15 @@ test/
 - **Addressing modes via typeclasses**: `Operand` typeclass with a single method `toAddrMode :: a -> AddressingMode`. Instances for newtypes (`Imm`, `ZP`, `Abs`, etc.), bare types (`Word8` = ZP, `Word16` = Abs), tuples (`(addr, X)`), and singletons (`A`).
 - **`(#)` operator**: Immediate mode sugar (`lda # 0x42`).
 - **`(!)` operator**: Indirect mode sugar via `Indirectable` typeclass (`ptr ! Y`).
-- **Typed ZP variables**: `Var8`, `Var16`, `Ptr` allocated from a `Set Word8` free pool.
+- **Typed memory locations**: Symmetric ZP and absolute types, unified by the `Loc16` typeclass (`TypeFamilies`):
+
+  |          | ZP (`Word8` base)     | Absolute (`Word16` base)  |
+  |----------|-----------------------|---------------------------|
+  | 1-byte   | `Var8`                | `Mem8`                    |
+  | 2-byte   | `Var16`               | `Mem16`                   |
+  | Pointer  | `Ptr`                 | `MemPtr`                  |
+
+  ZP types are allocated from a `Set Word8` free pool (`allocVar8`, `allocVar16`, `allocPtr`). Absolute types are constructed directly (`Mem8 0xC400`). `Loc16` provides `lo16`/`hi16` to access individual bytes; `Byte` is an associated type (`Var8` for ZP, `Mem8` for absolute). Ops16 functions (`add16`, `lshift16`, etc.) are generic over `Loc16 a => a`.
 - **Assembly-time errors**: `error` calls for invalid addressing modes, out-of-ZP, branch range issues, `fitsIn`/`samePage` violations.
 - **Output formats**: `[Word8]` lists throughout; `toPRG` adds load address header; `toD64` builds complete disk image; `exportAcmeWith` produces ACME cross-assembler source text.
 - **ACME import/export roundtrip**: `Frontend.ACME` parses ACME `.asm` files into an AST (`Syntax`) and assembles them to bytes (`Assemble`). `Backend.ACME` exports assembly programs to ACME text. Together they enable a roundtrip: EDSL → `.asm` text → parse → assemble → identical bytes.

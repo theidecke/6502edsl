@@ -146,9 +146,10 @@ Emits: `A9 42 A5 80 B5 80 AD 34 12 BD 34 12 B9 34 12 A1 80 B1 80`
 | 6502 syntax        | EDSL syntax               | Explicit constructor          | Addressing mode    |
 |--------------------|---------------------------|-------------------------------|--------------------|
 | `LDA #$40`         | `lda # 0x40`              | `lda (Imm 0x40)`             | Immediate          |
-| `LDA $FB`          | `lda playerX`             | `lda (ZP 0xFB)`              | Zero page (var)    |
+| `LDA $FB`          | `lda playerX`             | `lda (ZP 0xFB)`              | Zero page (Var8)   |
 | `LDA $FB`          | `lda (0xFB :: Word8)`     | `lda (ZP 0xFB)`              | Zero page (raw)    |
-| `LDA $0400`        | `lda (0x0400 :: Word16)`  | `lda (Abs 0x0400)`           | Absolute           |
+| `LDA $0400`        | `lda flag`                | `lda (Abs 0x0400)`           | Absolute (Mem8)    |
+| `LDA $0400`        | `lda (0x0400 :: Word16)`  | `lda (Abs 0x0400)`           | Absolute (raw)     |
 | `LDA $FB,X`        | `lda (0xFB, X)`           | `lda (ZPX 0xFB)`             | Zero page,X        |
 | `LDA $FB,Y`        | `lda (0xFB, Y)`           | `lda (ZPY 0xFB)`             | Zero page,Y        |
 | `LDA $0400,X`      | `lda (0x0400, X)`         | `lda (AbsX 0x0400)`          | Absolute,X         |
@@ -188,9 +189,17 @@ mdo
 
 Emits: `A5 10 F0 02 A9 FF 60`
 
-### Zero-Page Variables
+### Typed Memory Locations
 
-The assembler manages zero-page allocation. Available addresses depend on which C64 subsystems are in use:
+The DSL provides symmetric typed wrappers for zero-page and absolute memory locations:
+
+|          | ZP (`Word8` base)     | Absolute (`Word16` base)  |
+|----------|-----------------------|---------------------------|
+| 1-byte   | `Var8`                | `Mem8`                    |
+| 2-byte   | `Var16`               | `Mem16`                   |
+| Pointer  | `Ptr`                 | `MemPtr`                  |
+
+**Zero-page variables** are allocated from a managed pool (available addresses depend on which C64 subsystems are in use):
 
 ```haskell
 let cfg = c64TargetConfig 0x0800 defaultC64Subsystems { useBasic = False }
@@ -205,10 +214,19 @@ assemble cfg $ do
 
 Emits: `A9 00 85 02 85 03 B1 02 60`
 
-Variable types:
+Allocators:
 - `allocVar8` — single zero-page byte (`Var8`)
-- `allocVar16` — two contiguous bytes (`Var16`, with `lo16`/`hi16` accessors)
+- `allocVar16` — two contiguous bytes (`Var16`)
 - `allocPtr` — two-byte pointer (`Ptr`, supports `!` indirect syntax)
+
+**Absolute memory locations** are constructed directly:
+
+```haskell
+let counter = Mem16 0xC600      -- 16-bit value at $C600/$C601
+    flag    = Mem8  0xC800      -- single byte at $C800
+```
+
+The `Loc16` typeclass unifies 2-byte locations (`Var16`, `Ptr`, `Mem16`, `MemPtr`) with `lo16`/`hi16` accessors that return the appropriate byte type (`Var8` for ZP, `Mem8` for absolute). All Ops16 functions work with any `Loc16` instance.
 
 ### Data Embedding
 
@@ -285,16 +303,20 @@ Emits: `E6 80 4C 00 C0` (at origin `$C000`)
 
 ### 16-bit Operations
 
-`Asm.Mos6502.Ops16` provides 16-bit arithmetic on `Var16` zero-page pairs:
+`Asm.Mos6502.Ops16` provides 16-bit arithmetic on any `Loc16` instance (ZP or absolute):
 
 ```haskell
 assemble cfg $ do
     v <- allocVar16
     load16 v 0x1234            -- v = $1234
     inc16 v                    -- v++
+
+-- Also works with absolute memory:
+let counter = Mem16 0xC600
+lshift16 counter               -- counter <<= 1
 ```
 
-Emits: `A9 34 85 02 A9 12 85 03 E6 02 D0 02 E6 03`
+Emits (ZP example): `A9 34 85 02 A9 12 85 03 E6 02 D0 02 E6 03`
 
 Available operations:
 - `load16 v imm` — load immediate constant
@@ -302,6 +324,7 @@ Available operations:
 - `add16 dst a b` / `sub16 dst a b` — addition / subtraction
 - `mov16 dst src` — copy
 - `cmp16 a b` — unsigned compare (sets carry for `a >= b`)
+- `lshift16 v` / `rshift16 v` — 16-bit left / right shift
 
 ### Debug and Assertions
 
@@ -535,10 +558,11 @@ src/
   Asm/
     Monad.hs                   -- MonadASM/MonadZPAlloc typeclasses, ASM concrete monad,
                                --   MonadFix for forward refs, ZP allocator
-    Mos6502.hs                 -- Operand typeclass, addressing mode sugar, instruction emission
+    Mos6502.hs                 -- Operand typeclass, addressing mode sugar, typed memory
+                               --   locations (Var8/Var16/Ptr, Mem8/Mem16/MemPtr), Loc16 typeclass
     Mos6502/
       Control.hs               -- Structured control flow (if_eq, while_, for_x, loop_)
-      Ops16.hs                 -- 16-bit arithmetic (add16, inc16, cmp16, etc.)
+      Ops16.hs                 -- 16-bit arithmetic via Loc16 (add16, inc16, lshift16, etc.)
       Memory.hs                -- Alignment and page assertions
       Debug.hs                 -- Size assertions, named labels
   Backend/
