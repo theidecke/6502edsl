@@ -2,8 +2,13 @@ module Asm.Monad
     ( ASM
     , AnnotationStack
     , TargetConfig (..)
+    , Label(..)
+    , ToAddr(..)
     , emit
+    , currentPC
     , label
+    , namedLabel
+    , registerLabel
     , assemble
     , assembleWithLabels
     , pushAnnotation
@@ -21,6 +26,19 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Word (Word8, Word16)
 
+-- | A label with a lazy address and an optional name.
+data Label = Label
+    { labelAddr :: Word16       -- lazy (filled by MonadFix)
+    , labelName :: Maybe String
+    }
+
+-- | Convert something to a 16-bit address.
+class ToAddr a where
+    toAddr :: a -> Word16
+
+instance ToAddr Word16 where toAddr = id
+instance ToAddr Label  where toAddr = labelAddr
+
 -- | Annotation context at a given address: innermost label at head.
 type AnnotationStack = [String]
 
@@ -35,10 +53,11 @@ data TargetConfig = TargetConfig
 
 -- | Internal assembler state: program counter + free zero-page set + annotation stack + labels.
 data AsmState = AsmState
-    { asmPC          :: !Word16
-    , asmFreeZP      :: !(Set Word8)
-    , asmAnnotations :: !AnnotationStack
-    , asmLabels      :: !(Map Word16 AnnotationStack)
+    { asmPC            :: !Word16
+    , asmFreeZP        :: !(Set Word8)
+    , asmAnnotations   :: !AnnotationStack
+    , asmAnnotationMap :: !(Map Word16 AnnotationStack)
+    , asmLabels        :: [Label]
     }
 
 -- | The assembler monad. Carries assembler state and a difference list
@@ -87,12 +106,33 @@ instance MonadFix ASM where
 emit :: [Word8] -> ASM ()
 emit bs = ASM $ \s ->
     ((), s { asmPC = asmPC s + fromIntegral (length bs)
-           , asmLabels = Map.insert (asmPC s) (asmAnnotations s) (asmLabels s)
+           , asmAnnotationMap = Map.insert (asmPC s) (asmAnnotations s) (asmAnnotationMap s)
            }, Endo (bs ++))
 
--- | Return the current program counter (defines a label).
-label :: ASM Word16
-label = ASM $ \s -> (asmPC s, s, mempty)
+-- | Return the current program counter.
+currentPC :: ASM Word16
+currentPC = ASM $ \s -> (asmPC s, s, mempty)
+
+-- | Create an unnamed label at the current program counter.
+label :: ASM Label
+label = do
+    pc <- currentPC
+    let l = Label pc Nothing
+    registerLabel l
+    pure l
+
+-- | Create a named label at the current program counter.
+namedLabel :: String -> ASM Label
+namedLabel name = do
+    pc <- currentPC
+    let l = Label pc (Just name)
+    registerLabel l
+    pure l
+
+-- | Register a label in the assembler state.
+registerLabel :: Label -> ASM ()
+registerLabel lbl = ASM $ \s ->
+    ((), s { asmLabels = lbl : asmLabels s }, mempty)
 
 -- | Push a name onto the annotation stack (innermost at head).
 pushAnnotation :: String -> ASM ()
@@ -104,22 +144,23 @@ popAnnotation :: ASM ()
 popAnnotation = ASM $ \s ->
     ((), s { asmAnnotations = drop 1 (asmAnnotations s) }, mempty)
 
--- | Run an assembly block, returning the result, emitted bytes, and
--- collected labels (annotation stack per address).
-assembleWithLabels :: TargetConfig -> ASM a -> (a, [Word8], Map Word16 AnnotationStack)
+-- | Run an assembly block, returning the result, emitted bytes,
+-- collected annotations (annotation stack per address), and registered labels.
+assembleWithLabels :: TargetConfig -> ASM a -> (a, [Word8], Map Word16 AnnotationStack, [Label])
 assembleWithLabels cfg (ASM f) =
     let s0 = AsmState { asmPC = origin cfg
                        , asmFreeZP = freeZeroPage cfg
                        , asmAnnotations = []
-                       , asmLabels = Map.empty
+                       , asmAnnotationMap = Map.empty
+                       , asmLabels = []
                        }
         (a, s, Endo dl) = f s0
-    in  (a, dl [], asmLabels s)
+    in  (a, dl [], asmAnnotationMap s, reverse (asmLabels s))
 
 -- | Run an assembly block with the given target configuration.
 assemble :: TargetConfig -> ASM a -> (a, [Word8])
 assemble cfg prog =
-    let (a, bs, _labels) = assembleWithLabels cfg prog
+    let (a, bs, _annotations, _labels) = assembleWithLabels cfg prog
     in  (a, bs)
 
 -- | Allocate @n@ contiguous bytes from the free zero-page region.

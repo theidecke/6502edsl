@@ -6,7 +6,7 @@ import Data.Map.Strict qualified as Map
 import Data.Word (Word8)
 import qualified Data.ByteString as BS
 
-import Asm.Monad (ASM, TargetConfig(..), assembleWithLabels, label, lo, hi)
+import Asm.Monad (ASM, TargetConfig(..), assembleWithLabels, label, Label(..), lo, hi)
 import Asm.Mos6502
 import Asm.Mos6502.Control (if_eq, while_, for_y, loop_)
 import Asm.Mos6502.Debug (fitsIn, annotate)
@@ -35,13 +35,13 @@ main :: IO ()
 main = do
     let subs = defaultC64Subsystems { useBasic = False }
         cfg  = c64TargetConfig 0xC000 subs
-        (_, bytes, labels) = assembleWithLabels cfg program
+        (_, bytes, annotations, _labels) = assembleWithLabels cfg program
         prg = toPRG (origin cfg) bytes
         d64 = toD64 "COLOR WASHER" prg
     BS.writeFile "color-washer.d64" (BS.pack d64)
     putStrLn $ "Wrote color-washer.d64 (" ++ show (length d64) ++ " bytes)"
-    writeFile "color-washer.vs" (exportViceLabels labels)
-    putStrLn $ "Wrote color-washer.vs (" ++ show (Map.size labels) ++ " labels)"
+    writeFile "color-washer.vs" (exportViceLabels annotations)
+    putStrLn $ "Wrote color-washer.vs (" ++ show (Map.size annotations) ++ " labels)"
 
 program :: ASM ()
 program = mdo
@@ -124,7 +124,7 @@ program = mdo
         lda # lo msgAddr; sta screenPtr
         lda # hi msgAddr; sta (screenPtr + 1)
         for_y msgLen $ do
-            lda (msgData, Y)
+            lda (labelAddr msgData, Y)
             and_ # 0x3F        -- PETSCII → screen code
             sta (screenPtr ! Y)
 
@@ -156,7 +156,7 @@ program = mdo
                 adc colorPhase
                 and_ # 0x0F
                 tay
-                lda (colorTable, Y)
+                lda (labelAddr colorTable, Y)
                 sta (colorRAM, X)
                 sta (colorRAM + 0x0100, X)
                 sta (colorRAM + 0x0200, X)

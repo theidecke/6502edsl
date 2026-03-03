@@ -40,7 +40,7 @@ module Asm.Mos6502
 import Data.Word (Word8, Word16)
 import Numeric (showHex)
 
-import Asm.Monad (ASM, emit, label, allocZP)
+import Asm.Monad (ASM, emit, currentPC, allocZP, ToAddr(..))
 import ISA.Mos6502 (Opcode(..), AddressingMode(..), Instruction(..), encode)
 
 -- ---------------------------------------------------------------------------
@@ -182,14 +182,14 @@ emitImplied opc = emit (encode (Instruction opc Implied))
 emitAccum :: Opcode -> ASM ()
 emitAccum opc = emit (encode (Instruction opc Accumulator))
 
-emitBranch :: Opcode -> Word16 -> ASM ()
+emitBranch :: ToAddr a => Opcode -> a -> ASM ()
 emitBranch opc target = do
-    pc <- label
-    let diff = fromIntegral target - fromIntegral pc - 2 :: Int
+    pc <- currentPC
+    let diff = fromIntegral (toAddr target) - fromIntegral pc - 2 :: Int
         byte | diff < -128 || diff > 127 =
                  error $ show opc ++ " branch out of range: offset " ++ show diff
                       ++ " (PC=$" ++ showHex16 pc
-                      ++ ", target=$" ++ showHex16 target ++ ")"
+                      ++ ", target=$" ++ showHex16 (toAddr target) ++ ")"
              | otherwise = fromIntegral diff
     emit (encode (Instruction opc (Relative byte)))
   where
@@ -318,7 +318,7 @@ ror_a = emitAccum ROR
 -- Branch instructions
 -- ---------------------------------------------------------------------------
 
-bcc, bcs, beq, bmi, bne, bpl, bvc, bvs :: Word16 -> ASM ()
+bcc, bcs, beq, bmi, bne, bpl, bvc, bvs :: ToAddr a => a -> ASM ()
 bcc = emitBranch BCC
 bcs = emitBranch BCS
 beq = emitBranch BEQ
@@ -332,14 +332,14 @@ bvs = emitBranch BVS
 -- Jump instructions
 -- ---------------------------------------------------------------------------
 
-jmp :: Word16 -> ASM ()
-jmp addr = emit (encode (Instruction JMP (Absolute addr)))
+jmp :: ToAddr a => a -> ASM ()
+jmp target = emit (encode (Instruction JMP (Absolute (toAddr target))))
 
-jmp_ind :: Word16 -> ASM ()
-jmp_ind addr = emit (encode (Instruction JMP (Indirect addr)))
+jmp_ind :: ToAddr a => a -> ASM ()
+jmp_ind target = emit (encode (Instruction JMP (Indirect (toAddr target))))
 
-jmpInd :: Word16 -> ASM ()
+jmpInd :: ToAddr a => a -> ASM ()
 jmpInd = jmp_ind
 
-jsr :: Word16 -> ASM ()
-jsr addr = emit (encode (Instruction JSR (Absolute addr)))
+jsr :: ToAddr a => a -> ASM ()
+jsr target = emit (encode (Instruction JSR (Absolute (toAddr target))))

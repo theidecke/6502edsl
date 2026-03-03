@@ -3,7 +3,9 @@ module Test.Memory (tests) where
 import Control.Exception (evaluate, try, SomeException)
 import Data.Map.Strict qualified as Map
 
-import Asm.Monad (assemble, assembleWithLabels, emit, label)
+import Data.Word (Word16)
+
+import Asm.Monad (assemble, assembleWithLabels, emit, currentPC)
 import Asm.Mos6502 (Var8(..), allocVar8, nop, lda, rts, (#))
 import Asm.Mos6502.Memory (align, alignPage, samePage)
 import Asm.Mos6502.Debug (fitsIn, annotate)
@@ -40,11 +42,11 @@ prop_alignPage =
 
 prop_samePagePasses :: Bool
 prop_samePagePasses =
-    snd (assemble (simpleConfig 0x0800) (samePage 0x08FF)) == []
+    snd (assemble (simpleConfig 0x0800) (samePage (0x08FF :: Word16))) == []
 
 prop_samePageFails :: IO Bool
 prop_samePageFails = do
-    let prog = do emit [0x00, 0x00]; samePage 0x0800
+    let prog = do emit [0x00, 0x00]; samePage (0x0800 :: Word16)
         bytes = snd (assemble (simpleConfig 0x08FF) prog)
     result <- try (evaluate (length bytes)) :: IO (Either SomeException Int)
     pure $ isLeft result
@@ -71,7 +73,7 @@ prop_fitsInExact =
 prop_fitsInPreservesResult :: Bool
 prop_fitsInPreservesResult =
     let cfg = simpleConfig 0x0800
-        (pc, _) = assemble cfg (fitsIn 10 (lda # 0x42 >> label))
+        (pc, _) = assemble cfg (fitsIn 10 (lda # 0x42 >> currentPC))
     in  pc == 0x0802
 
 -- ---------------------------------------------------------------------------
@@ -81,28 +83,28 @@ prop_fitsInPreservesResult =
 prop_annotateRecordsLabel :: Bool
 prop_annotateRecordsLabel =
     let cfg = simpleConfig 0x0800
-        (_, _, labels) = assembleWithLabels cfg (annotate "main" nop)
-    in  labels == Map.fromList [(0x0800, ["main"])]
+        (_, _, annotations, _) = assembleWithLabels cfg (annotate "main" nop)
+    in  annotations == Map.fromList [(0x0800, ["main"])]
 
 prop_annotateMultiple :: Bool
 prop_annotateMultiple =
     let cfg = simpleConfig 0x0800
-        (_, _, labels) = assembleWithLabels cfg $ do
+        (_, _, annotations, _) = assembleWithLabels cfg $ do
             annotate "first" nop
             annotate "second" nop
-    in  labels == Map.fromList [(0x0800, ["first"]), (0x0801, ["second"])]
+    in  annotations == Map.fromList [(0x0800, ["first"]), (0x0801, ["second"])]
 
 prop_annotateNested :: Bool
 prop_annotateNested =
     let cfg = simpleConfig 0x0800
-        (_, _, labels) = assembleWithLabels cfg $
+        (_, _, annotations, _) = assembleWithLabels cfg $
             annotate "outer" (nop >> annotate "inner" nop)
-    in  labels == Map.fromList [(0x0800, ["outer"]), (0x0801, ["inner", "outer"])]
+    in  annotations == Map.fromList [(0x0800, ["outer"]), (0x0801, ["inner", "outer"])]
 
 prop_annotatePreservesResult :: Bool
 prop_annotatePreservesResult =
     let cfg = zpConfig [0x10..0x19]
-        (v, _, _) = assembleWithLabels cfg (annotate "x" allocVar8)
+        (v, _, _, _) = assembleWithLabels cfg (annotate "x" allocVar8)
     in  v == Var8 0x10
 
 -- ---------------------------------------------------------------------------
@@ -114,17 +116,17 @@ prop_assembleWithLabelsSameBytes =
     let cfg = simpleConfig 0x0800
         prog = nop >> nop >> rts
         (_, bytesA) = assemble cfg prog
-        (_, bytesB, _) = assembleWithLabels cfg prog
+        (_, bytesB, _, _) = assembleWithLabels cfg prog
     in  bytesA == bytesB
 
 prop_assembleWithLabelsOrder :: Bool
 prop_assembleWithLabelsOrder =
     let cfg = simpleConfig 0x0800
-        (_, _, labels) = assembleWithLabels cfg $ do
+        (_, _, annotations, _) = assembleWithLabels cfg $ do
             annotate "a" nop
             annotate "b" nop
             annotate "c" nop
-    in  Map.elems labels == [["a"], ["b"], ["c"]]
+    in  Map.elems annotations == [["a"], ["b"], ["c"]]
 
 -- ---------------------------------------------------------------------------
 -- Test list

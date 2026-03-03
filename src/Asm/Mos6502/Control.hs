@@ -7,16 +7,16 @@ module Asm.Mos6502.Control
     , while_, for_x, for_y, loop_
     ) where
 
-import Data.Word (Word8, Word16)
+import Data.Word (Word8)
 
-import Asm.Monad (ASM, label)
+import Asm.Monad (ASM, Label, label)
 import Asm.Mos6502 (bne, beq, bcc, bcs, bpl, bmi, jmp, ldx, ldy, dex, dey, (#))
 
 -- | Generalized if. The first argument is the branch that skips to @else@,
 -- i.e. the /negation/ of the desired condition.
 --
 -- @if_ bne thenBlock elseBlock@ means "if equal, run thenBlock; else elseBlock."
-if_ :: (Word16 -> ASM ()) -> ASM () -> ASM () -> ASM ()
+if_ :: (Label -> ASM ()) -> ASM () -> ASM () -> ASM ()
 if_ skipBranch thenBlock elseBlock = mdo
     skipBranch elseStart
     thenBlock
@@ -52,7 +52,7 @@ if_mi = if_ bpl
 
 -- | Parameterized while loop. @while_ beq testBlock bodyBlock@ means
 -- "while test result is non-zero, execute body."
-while_ :: (Word16 -> ASM ()) -> ASM () -> ASM () -> ASM ()
+while_ :: (Label -> ASM ()) -> ASM () -> ASM () -> ASM ()
 while_ exitBranch cond body = mdo
     top <- label
     cond

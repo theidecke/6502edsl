@@ -15,13 +15,13 @@ import Target.C64.D64 (toD64)
 main :: IO ()
 main = do
     let cfg = c64TargetConfig 0xC000 defaultC64Subsystems
-        (_, bytes, labels) = assembleWithLabels cfg program
+        (_, bytes, annotations, _labels) = assembleWithLabels cfg program
         prg = toPRG (origin cfg) bytes
         d64 = toD64 "HELLO" prg
     BS.writeFile "hello.d64" (BS.pack d64)
     putStrLn $ "Wrote hello.d64 (" ++ show (length d64) ++ " bytes)"
-    writeFile "hello.vs" (exportViceLabels labels)
-    putStrLn $ "Wrote hello.vs (" ++ show (length labels) ++ " labels)"
+    writeFile "hello.vs" (exportViceLabels annotations)
+    putStrLn $ "Wrote hello.vs (" ++ show (length annotations) ++ " labels)"
     -- In VICE: attach disk image, then type  LOAD"*",8,1  followed by  SYS 49152
 
 -- | Fill the screen with block characters on a black background.

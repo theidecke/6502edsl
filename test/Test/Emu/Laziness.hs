@@ -2,7 +2,7 @@
 
 module Test.Emu.Laziness (tests) where
 
-import Data.Word (Word8)
+import Data.Word (Word8, Word16)
 
 import Test.Helpers (checkOnce, section, asmAt)
 import Asm.Monad (label)
@@ -85,7 +85,7 @@ prop_mdoUnreachableLabel =
                 lda # (0x42 :: Word8)
                 jmp done
                 jmp nowhere
-                nowhere <- pure undefined
+                nowhere <- pure (undefined :: Word16)
                 done <- label
                 nop
         s = runN 3 (loadProgram 0x0800 bs initCPU)

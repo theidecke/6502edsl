@@ -2,15 +2,15 @@ module Asm.Mos6502.Debug (fitsIn, annotate) where
 
 import Control.Monad (when)
 
-import Asm.Monad (ASM, label, pushAnnotation, popAnnotation)
+import Asm.Monad (ASM, currentPC, pushAnnotation, popAnnotation)
 
 -- | Assert that a block emits at most @maxBytes@ bytes.
 -- Returns the block's result so it composes transparently.
 fitsIn :: Int -> ASM a -> ASM a
 fitsIn maxBytes block = do
-    startPC <- label
+    startPC <- currentPC
     a <- block
-    endPC <- label
+    endPC <- currentPC
     let size = fromIntegral (endPC - startPC) :: Int
     when (size > maxBytes) $
         error $ "fitsIn: block emitted " ++ show size

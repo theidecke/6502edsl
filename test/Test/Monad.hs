@@ -6,7 +6,7 @@ import Control.Exception (evaluate, try, SomeException)
 import Data.Word (Word8, Word16)
 import Test.QuickCheck hiding (label)
 
-import Asm.Monad (assemble, emit, label, allocZP)
+import Asm.Monad (assemble, emit, label, currentPC, allocZP)
 import Asm.Mos6502
 import Test.Helpers
 
@@ -16,19 +16,19 @@ import Test.Helpers
 
 prop_labelReturnsOrigin :: Word16 -> Bool
 prop_labelReturnsOrigin org =
-    let (pc, _) = assemble (simpleConfig org) label
+    let (pc, _) = assemble (simpleConfig org) currentPC
     in  pc == org
 
 prop_emitAdvancesPC :: Word16 -> [Word8] -> Property
 prop_emitAdvancesPC org bs =
     length bs < 256 ==>
-        let (pc, _) = assemble (simpleConfig org) (emit bs >> label)
+        let (pc, _) = assemble (simpleConfig org) (emit bs >> currentPC)
         in  pc == org + fromIntegral (length bs)
 
 prop_sequenceAdditive :: Word16 -> [Word8] -> [Word8] -> Property
 prop_sequenceAdditive org a b =
     length a + length b < 256 ==>
-        let (pc, _) = assemble (simpleConfig org) (emit a >> emit b >> label)
+        let (pc, _) = assemble (simpleConfig org) (emit a >> emit b >> currentPC)
         in  pc == org + fromIntegral (length a + length b)
 
 prop_sequenceBytesConcat :: [Word8] -> [Word8] -> Property

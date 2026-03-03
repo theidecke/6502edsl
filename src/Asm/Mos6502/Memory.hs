@@ -5,14 +5,14 @@ import Data.Word (Word16)
 import Control.Monad (when)
 import Numeric (showHex)
 
-import Asm.Monad (ASM, emit, label)
+import Asm.Monad (ASM, emit, currentPC, ToAddr(..))
 
 -- | Pad with @0x00@ bytes until the program counter is a multiple of @n@.
 align :: Int -> ASM ()
 align n
     | n <= 0    = pure ()
     | otherwise = do
-        pc <- label
+        pc <- currentPC
         let pos       = fromIntegral pc :: Int
             remainder = pos `mod` n
             padding   = if remainder == 0 then 0 else n - remainder
@@ -25,9 +25,10 @@ alignPage = align 256
 
 -- | Assert that the current PC and the given address are on the same
 -- 256-byte page. Fails at assembly time if they differ.
-samePage :: Word16 -> ASM ()
-samePage addr = do
-    pc <- label
+samePage :: ToAddr a => a -> ASM ()
+samePage target = do
+    pc <- currentPC
+    let addr = toAddr target
     when ((pc .&. 0xFF00) /= (addr .&. 0xFF00)) $
         error $ "samePage: PC=$" ++ showHex16 pc
              ++ " and address=$" ++ showHex16 addr
