@@ -1980,7 +1980,7 @@ main = do
     -- Execution profile: run the first 1M cycles through the emulator
     s0 <- loadC64Roms cfg initCPU
     let s1       = set regPC 0x080D $ loadProgram (origin cfg) bytes s0
-        states   = traceForCycles 10_000_000 s1
+        states   = traceForCycles 20_000_000 s1
         coverage = pcCoverage states
         labelMap = annotations `Map.union` romLabels
         profile  = formatProfile labelMap coverage
@@ -1999,14 +1999,16 @@ main = do
             putStrLn $ formatState labelMap (i+1) after
         [] -> putStrLn "\nNo jump to $0000 found in trace"
 
-    -- Print Lorenz attractor trajectory from emulator trace
+    -- Write Lorenz attractor trajectory to text file
     let iterationStates = filter (\s -> view regPC s == afterXyzStepAddr) states
-    putStrLn $ "\nLorenz attractor trajectory (" ++ show (length iterationStates)
-            ++ " iterations in trace):"
-    putStrLn   "  Iter    Cycle        X           Y           Z"
-    forM_ (zip [1..] iterationStates) $ \(i, s) ->
-        putStrLn $ "  " ++ padR 6 (show (i :: Int))
-               ++ "  " ++ padR 10 (show (view cycles s))
-               ++ "  " ++ padR 12 (showFFloat (Just 4) (readCBMFloat fpXcur s) "")
-               ++ "  " ++ padR 12 (showFFloat (Just 4) (readCBMFloat fpYcur s) "")
-               ++ "  " ++ showFFloat (Just 4) (readCBMFloat fpZcur s) ""
+        header = "  Iter    Cycle        X           Y           Z"
+        rows   = map (\(i, s) ->
+                     "  " ++ padR 6 (show (i :: Int))
+                  ++ "  " ++ padR 10 (show (view cycles s))
+                  ++ "  " ++ padR 12 (showFFloat (Just 4) (readCBMFloat fpXcur s) "")
+                  ++ "  " ++ padR 12 (showFFloat (Just 4) (readCBMFloat fpYcur s) "")
+                  ++ "  " ++ showFFloat (Just 4) (readCBMFloat fpZcur s) "")
+                 (zip [1..] iterationStates)
+    writeFile "attraktor-trajectory.txt" (unlines (header : rows))
+    putStrLn $ "Wrote attraktor-trajectory.txt (" ++ show (length iterationStates)
+            ++ " iterations)"
