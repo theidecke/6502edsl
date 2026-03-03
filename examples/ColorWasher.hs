@@ -14,10 +14,10 @@ import Asm.Mos6502.Memory (alignPage, samePage)
 import Asm.Mos6502.Ops16 (load16, inc16)
 import Target.C64 (C64Subsystems(..), c64TargetConfig, defaultC64Subsystems)
 import Target.C64.Data (byte, petscii)
-import Target.C64.Debug (exportViceLabels)
+import Backend.C64.D64 (toD64)
+import Backend.C64.PRG (toPRG)
+import Backend.C64.ViceLabels (exportViceLabels)
 import Target.C64.Mem
-import Target.C64.PRG (toPRG)
-import Target.C64.D64 (toD64)
 
 -- | Color-wash demo for the C64.
 --

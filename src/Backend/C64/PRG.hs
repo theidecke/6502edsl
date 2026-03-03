@@ -1,4 +1,4 @@
-module Target.C64.PRG
+module Backend.C64.PRG
     ( toPRG
     ) where
 

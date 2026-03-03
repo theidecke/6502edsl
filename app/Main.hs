@@ -7,10 +7,10 @@ import Asm.Mos6502
 import Asm.Mos6502.Control (loop_)
 import Asm.Mos6502.Debug (annotate)
 import Target.C64 (c64TargetConfig, defaultC64Subsystems)
-import Target.C64.Debug (exportViceLabels)
+import Backend.C64.D64 (toD64)
+import Backend.C64.PRG (toPRG)
+import Backend.C64.ViceLabels (exportViceLabels)
 import Target.C64.Mem
-import Target.C64.PRG (toPRG)
-import Target.C64.D64 (toD64)
 
 main :: IO ()
 main = do

@@ -1,4 +1,4 @@
-module Target.C64.Debug (exportViceLabels) where
+module Backend.C64.ViceLabels (exportViceLabels) where
 
 import Data.List (intercalate)
 import Data.Map.Strict (Map)

@@ -6,10 +6,10 @@ import Data.Word (Word8, Word16)
 import Test.QuickCheck
 
 import Asm.Monad (lo, hi)
+import Backend.C64.D64 (toD64)
+import Backend.C64.PRG (toPRG)
+import Backend.C64.ViceLabels (exportViceLabels)
 import Target.C64.Data (byte, word, petscii, pstring, charToPetscii)
-import Target.C64.Debug (exportViceLabels)
-import Target.C64.PRG (toPRG)
-import Target.C64.D64 (toD64)
 import Test.Helpers
 
 -- ---------------------------------------------------------------------------

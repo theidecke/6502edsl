@@ -15,6 +15,7 @@ import Test.Emu.Trace qualified
 import Test.Emu.Integration qualified
 import Test.Emu.Dormann qualified
 import Test.Emu.Laziness qualified
+import Test.ACME qualified
 
 main :: IO ()
 main = do
@@ -32,6 +33,7 @@ main = do
         , Test.Emu.Integration.tests
         , Test.Emu.Dormann.tests
         , Test.Emu.Laziness.tests
+        , Test.ACME.tests
         ]
     if ok then putStrLn "\nAll properties passed."
           else putStrLn "\nSome properties FAILED." >> exitFailure

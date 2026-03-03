@@ -1,4 +1,4 @@
-module Target.C64.D64
+module Backend.C64.D64
     ( toD64
     ) where
 
