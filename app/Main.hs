@@ -20,7 +20,7 @@ import Backend.C64.D64 (toD64)
 import Backend.C64.PRG (toPRG)
 import Backend.C64.ViceLabels (exportViceLabels)
 import Emu.CPU (CPUState, initCPU, view, set, regPC, memAt, cycles)
-import Emu.Trace (loadProgram, traceForCycles, pcCoverage, formatProfile, formatState)
+import Emu.Trace (loadProgram, traceForCycles, pcCoverage, formatProfile, formatState, hex16)
 import Target.C64 (C64Subsystems(..), c64TargetConfig, defaultC64Subsystems, loadC64Roms)
 import Target.C64.Data (byte)
 import Target.C64.Mem
@@ -1983,7 +1983,7 @@ main = do
     -- Execution profile: run the first 1M cycles through the emulator
     s0 <- loadC64Roms cfg initCPU
     let s1       = set regPC 0x080D $ loadProgram (origin cfg) bytes s0
-        states   = traceForCycles 20_000_000 s1
+        states   = traceForCycles 1_000_000 s1
         coverage = pcCoverage states
         labelMap = annotations `Map.union` romLabels
         profile  = formatProfile labelMap coverage
@@ -1992,15 +1992,17 @@ main = do
 
     -- Time-travel debug: find where we first jump to $0000
     let pairs = zip states (drop 1 states)
+        watchAddress = 0xba51 :: Word16
+        watchAddressString = '$' : (hex16 watchAddress)
         transition = [(i, a, b) | ((a, b), i) <- zip pairs [0..],
-                                   view regPC b == 0x0000,
-                                   view regPC a /= 0x0000]
+                                   view regPC b == watchAddress,
+                                   view regPC a /= watchAddress]
     case transition of
         (i, before, after):_ -> do
-            putStrLn "\nFirst jump to $0000:"
+            putStrLn $ "\nFirst jump to " ++ watchAddressString ++ ":"
             putStrLn $ formatState labelMap i before
             putStrLn $ formatState labelMap (i+1) after
-        [] -> putStrLn "\nNo jump to $0000 found in trace"
+        [] -> putStrLn $ "\nNo jump to " ++ watchAddressString ++ " found in trace"
 
     -- Write Lorenz attractor trajectory to text file
     let iterationStates = filter (\s -> view regPC s == afterXyzStepAddr) states
